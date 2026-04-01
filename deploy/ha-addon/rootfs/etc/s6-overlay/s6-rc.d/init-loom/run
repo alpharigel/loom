@@ -1,0 +1,45 @@
+#!/command/with-contenv bashio
+# shellcheck shell=bash
+
+bashio::log.info "Initializing Loom configuration..."
+
+# Persistent directories under /config (mapped to addon_config volume)
+LOOM_DATA="/config/loom-data"
+mkdir -p "${LOOM_DATA}/sessions"
+mkdir -p "${LOOM_DATA}/scratch"
+mkdir -p "${LOOM_DATA}/agents"
+mkdir -p "${LOOM_DATA}/skills"
+mkdir -p "${LOOM_DATA}/worktrees"
+
+# Ensure project directory exists
+PROJECT_DIR=$(bashio::config 'project_directory')
+mkdir -p "${PROJECT_DIR}"
+
+# Write environment file for svc-loom
+ENV_FILE="/var/run/loom.env"
+{
+    echo "PORT=3000"
+    echo "NODE_ENV=production"
+    echo "LOOM_DATA_DIR=${LOOM_DATA}"
+    echo "LOOM_PROJECT_DIR=${PROJECT_DIR}"
+    echo "LOOM_HA_MODE=true"
+
+    if bashio::config.has_value 'anthropic_api_key'; then
+        echo "ANTHROPIC_API_KEY=$(bashio::config 'anthropic_api_key')"
+    fi
+
+    # Generate and persist a session secret on first run
+    if [ ! -f "${LOOM_DATA}/.session-secret" ]; then
+        head -c 32 /dev/urandom | od -A n -t x1 | tr -d ' \n' > "${LOOM_DATA}/.session-secret"
+    fi
+    echo "SESSION_SECRET=$(cat "${LOOM_DATA}/.session-secret")"
+} > "${ENV_FILE}"
+chmod 600 "${ENV_FILE}"
+
+# Write initial Loom config.json if it doesn't exist
+CONFIG_FILE="${LOOM_DATA}/config.json"
+if [ ! -f "${CONFIG_FILE}" ]; then
+    echo "{\"projectDirectory\": \"${PROJECT_DIR}\", \"dockerEnabled\": false}" > "${CONFIG_FILE}"
+fi
+
+bashio::log.info "Loom configuration initialized"

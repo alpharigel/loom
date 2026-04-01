@@ -1,0 +1,12 @@
+#!/command/with-contenv bashio
+# shellcheck shell=bash
+
+bashio::log.info "Starting Loom server..."
+
+set -a
+# shellcheck source=/dev/null
+source /var/run/loom.env
+set +a
+
+cd /app || exit 1
+exec node server.js

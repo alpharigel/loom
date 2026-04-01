@@ -1,0 +1,5 @@
+#!/command/with-contenv bashio
+# shellcheck shell=bash
+
+bashio::log.warning "nginx stopped (exit code: ${1}), restarting..."
+sleep 3
