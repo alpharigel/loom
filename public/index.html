@@ -160,6 +160,22 @@
         <p class="field-hint">All projects and worktrees will be stored in this directory.</p>
 
         <div style="margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border);">
+          <label class="field-label">LAN Access</label>
+          <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
+            <label class="toggle-switch">
+              <input type="checkbox" id="input-lan-enabled">
+              <span class="toggle-slider"></span>
+            </label>
+            <span style="font-size: 12px; color: var(--text-secondary);">Allow connections from other machines on your network</span>
+          </div>
+          <p class="field-hint">Enables mDNS discovery and multi-instance workspace switching. Requires server restart to take effect.</p>
+          <div id="lan-restart-hint" style="display:none; margin-top: 8px; display: flex; align-items: center; gap: 10px;">
+            <span class="field-hint" style="color: var(--accent); margin: 0;">Restart to apply.</span>
+            <button id="btn-restart-server" class="btn btn-primary" style="padding: 4px 12px; font-size: 11px;">Restart Now</button>
+          </div>
+        </div>
+
+        <div style="margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border);">
           <label class="field-label">Docker Isolation</label>
           <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
             <label class="toggle-switch">
@@ -293,11 +309,42 @@
 
   <!-- Profile Picker Overlay -->
   <div id="profile-picker-overlay" class="modal-overlay hidden">
-    <div class="modal" style="max-width: 340px;">
+    <div class="modal profile-picker-modal">
       <div class="modal-header">
-        <h2>Choose Profile</h2>
+        <h2>Select Operator</h2>
+        <button class="icon-btn modal-close" id="btn-close-profile-picker">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
       </div>
-      <div class="modal-body" id="profile-picker-list"></div>
+      <div class="modal-body">
+        <div id="profile-picker-list" class="profile-grid"></div>
+        <div class="profile-create-row">
+          <input type="text" id="input-new-profile-quick" class="text-input" placeholder="New profile name...">
+          <button id="btn-create-profile-quick" class="btn btn-primary">Create</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Profile Manager Overlay -->
+  <div id="profile-manager-overlay" class="modal-overlay hidden">
+    <div class="modal profile-manager-modal">
+      <div class="modal-header">
+        <h2>Manage Profiles</h2>
+        <button class="icon-btn modal-close" id="btn-close-profile-manager">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div id="profile-manager-list" class="profile-manager-list"></div>
+        <div class="profile-add-section">
+          <label class="field-label">Add Profile</label>
+          <div class="input-group">
+            <input type="text" id="input-new-profile-name" class="text-input" placeholder="Profile name">
+            <button id="btn-add-profile" class="btn btn-primary">Add</button>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 

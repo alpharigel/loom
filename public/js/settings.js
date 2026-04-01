@@ -21,6 +21,18 @@ const Settings = {
       if (e.key === 'Enter') this.save();
     });
 
+    // LAN access toggle
+    document.getElementById('input-lan-enabled').addEventListener('change', (e) => {
+      this.toggleLan(e.target.checked);
+    });
+
+    // Restart button
+    document.getElementById('btn-restart-server').addEventListener('click', () => {
+      App.api('POST', '/restart').catch(() => {});
+      App.toast('Restarting server...', 'info');
+      this.close();
+    });
+
     // Docker toggle
     document.getElementById('input-docker-enabled').addEventListener('change', (e) => {
       this.toggleDocker(e.target.checked);
@@ -40,7 +52,9 @@ const Settings = {
       const cfg = await App.api('GET', '/config');
       App.state.projectDirectory = cfg.projectDirectory;
       App.state.dockerEnabled = cfg.dockerEnabled || false;
+      App.state.lanEnabled = cfg.host === '0.0.0.0';
       document.getElementById('input-project-dir').value = cfg.projectDirectory;
+      document.getElementById('input-lan-enabled').checked = App.state.lanEnabled;
       document.getElementById('input-docker-enabled').checked = cfg.dockerEnabled || false;
       this.refreshDockerStatus();
     } catch (err) {
@@ -50,6 +64,7 @@ const Settings = {
 
   open() {
     document.getElementById('input-project-dir').value = App.state.projectDirectory;
+    document.getElementById('input-lan-enabled').checked = App.state.lanEnabled;
     document.getElementById('input-docker-enabled').checked = App.state.dockerEnabled;
     document.getElementById('modal-overlay').classList.remove('hidden');
     document.getElementById('input-project-dir').focus();
@@ -75,6 +90,16 @@ const Settings = {
       Projects.refresh();
     } catch (err) {
       App.toast('Failed to save: ' + err.message, 'error');
+    }
+  },
+
+  async toggleLan(enabled) {
+    try {
+      await App.api('PUT', '/config', { host: enabled ? '0.0.0.0' : 'localhost' });
+      App.state.lanEnabled = enabled;
+      document.getElementById('lan-restart-hint').style.display = '';
+    } catch (err) {
+      App.toast('Failed to update LAN setting: ' + err.message, 'error');
     }
   },
 

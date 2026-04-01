@@ -15,7 +15,7 @@ const App = {
     rightTab: 'files',
     currentFilePath: null,
     dockerEnabled: false,
-    profile: null,           // { name, displayName, avatar }
+    profile: null,           // { name, avatar }
     profiles: [],            // all available profiles
     currentHost: localStorage.getItem('loom:currentHost') || '',  // '' = same origin
     peers: [],
@@ -56,28 +56,62 @@ const App = {
       }
     }
 
-    // No saved profile or it no longer exists — show picker if profiles exist
-    if (this.state.profiles.length > 0) {
-      this.showProfilePicker();
+    if (this.state.profiles.length === 0) {
+      // First time — prompt user to create their profile
+      this.showCreateFirstProfile();
+    } else if (this.state.profiles.length === 1) {
+      // Only one profile — just use it
+      this.selectProfile(this.state.profiles[0]);
     } else {
-      // No profiles at all — create a default one from OS username
-      await this.createAndSelectProfile(null);
+      // Multiple profiles, saved one is gone — show picker
+      this.showProfilePicker();
     }
     this.renderProfileMenu();
   },
 
   async createAndSelectProfile(name) {
-    const profileName = name || this.state.identity?.user || 'default';
+    if (!name) return;
     try {
       const profile = await this.api('POST', '/profiles', {
-        name: profileName.replace(/[^a-zA-Z0-9_-]/g, ''),
-        displayName: profileName,
+        name: name.replace(/[^a-zA-Z0-9_-]/g, ''),
       });
       this.state.profiles = await this.api('GET', '/profiles');
       this.selectProfile(profile);
     } catch (err) {
       console.warn('Failed to create profile:', err);
     }
+  },
+
+  showCreateFirstProfile() {
+    const overlay = document.getElementById('profile-picker-overlay');
+    if (!overlay) return;
+    const list = overlay.querySelector('#profile-picker-list');
+    list.innerHTML = '<p style="color:var(--text-secondary);font-size:12px;margin-bottom:4px;">Create a profile to get started.</p>';
+
+    const input = overlay.querySelector('#input-new-profile-quick');
+    const btn = overlay.querySelector('#btn-create-profile-quick');
+    input.value = '';
+    input.placeholder = 'Your name';
+
+    // Hide the close button on first-time setup
+    const closeBtn = overlay.querySelector('#btn-close-profile-picker');
+    if (closeBtn) closeBtn.style.display = 'none';
+
+    const doCreate = () => {
+      const name = input.value.trim();
+      if (name) {
+        this.createAndSelectProfile(name).then(() => {
+          overlay.classList.add('hidden');
+          if (closeBtn) closeBtn.style.display = '';
+          input.placeholder = 'New profile name...';
+        });
+      }
+    };
+    btn.onclick = doCreate;
+    input.onkeydown = (e) => { if (e.key === 'Enter') doCreate(); };
+
+    overlay.classList.remove('hidden');
+    input.focus();
   },
 
   selectProfile(profile) {
@@ -89,6 +123,13 @@ const App = {
     if (typeof Projects !== 'undefined') Projects.refresh();
   },
 
+  _avatarEmojis: [
+    '🐺', '🦊', '🐱', '🐶', '🐻', '🐼', '🐨', '🦁',
+    '🐯', '🐸', '🐙', '🦉', '🦅', '🐝', '🦋', '🐳',
+    '🚀', '⚡', '🔥', '💎', '🌙', '☀️', '🌊', '🍀',
+    '🎯', '🛠️', '⚙️', '🧪', '🔬', '📡', '🎮', '🤖',
+  ],
+
   showProfilePicker() {
     const overlay = document.getElementById('profile-picker-overlay');
     if (!overlay) return;
@@ -96,33 +137,43 @@ const App = {
     list.innerHTML = '';
 
     for (const p of this.state.profiles) {
-      const btn = document.createElement('button');
-      btn.className = 'profile-picker-btn';
-      const initial = (p.displayName || p.name)[0].toUpperCase();
-      btn.innerHTML = `
-        <span class="profile-avatar-circle">${p.avatar || initial}</span>
-        <span>${this.escHtml(p.displayName || p.name)}</span>
+      const initial = p.name[0].toUpperCase();
+      const isActive = this.state.profile?.name === p.name;
+      const card = document.createElement('button');
+      card.className = `profile-card${isActive ? ' is-active' : ''}`;
+      card.innerHTML = `
+        <div class="profile-avatar">${p.avatar || initial}</div>
+        <div class="profile-card-info">
+          <div class="profile-card-name">${this.escHtml(p.name)}</div>
+        </div>
       `;
-      btn.addEventListener('click', () => {
+      card.addEventListener('click', () => {
         this.selectProfile(p);
         overlay.classList.add('hidden');
       });
-      list.appendChild(btn);
+      list.appendChild(card);
     }
 
-    // Add "create new" option
-    const createBtn = document.createElement('button');
-    createBtn.className = 'profile-picker-btn profile-picker-create';
-    createBtn.innerHTML = `<span class="profile-avatar-circle">+</span><span>New profile...</span>`;
-    createBtn.addEventListener('click', () => {
-      const name = prompt('Profile name:');
+    // Quick-create input
+    const input = overlay.querySelector('#input-new-profile-quick');
+    const btn = overlay.querySelector('#btn-create-profile-quick');
+    input.value = '';
+
+    const doCreate = () => {
+      const name = input.value.trim();
       if (name) {
         this.createAndSelectProfile(name).then(() => overlay.classList.add('hidden'));
       }
-    });
-    list.appendChild(createBtn);
+    };
+    btn.onclick = doCreate;
+    input.onkeydown = (e) => { if (e.key === 'Enter') doCreate(); };
+
+    // Close button
+    const closeBtn = overlay.querySelector('#btn-close-profile-picker');
+    if (closeBtn) closeBtn.onclick = () => overlay.classList.add('hidden');
 
     overlay.classList.remove('hidden');
+    if (this.state.profiles.length > 0) input.focus();
   },
 
   renderProfileMenu() {
@@ -135,24 +186,28 @@ const App = {
       return;
     }
 
-    const initial = (profile.displayName || profile.name)[0].toUpperCase();
-    const avatarHtml = profile.avatar
-      ? `<span class="user-avatar-placeholder">${profile.avatar}</span>`
-      : `<span class="user-avatar-placeholder">${initial}</span>`;
+    const initial = profile.name[0].toUpperCase();
+    const avatarContent = profile.avatar || initial;
 
     container.innerHTML = `
       <button class="user-menu-btn" id="user-menu-toggle">
-        ${avatarHtml}
+        <span class="user-avatar-placeholder">${avatarContent}</span>
       </button>
       <div class="user-dropdown hidden" id="user-dropdown">
         <div class="user-dropdown-header">
-          ${avatarHtml}
+          <span class="user-avatar-placeholder">${avatarContent}</span>
           <div>
-            <div class="user-dropdown-name">${this.escHtml(profile.displayName || profile.name)}</div>
+            <div class="user-dropdown-name">${this.escHtml(profile.name)}</div>
           </div>
         </div>
-        <button class="user-dropdown-item" id="btn-switch-profile">Switch Profile</button>
-        <button class="user-dropdown-item" id="btn-manage-profiles">Manage Profiles</button>
+        <button class="user-dropdown-item" id="btn-switch-profile">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:8px;vertical-align:-2px"><path d="M16 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg>
+          Switch Profile
+        </button>
+        <button class="user-dropdown-item" id="btn-manage-profiles">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:8px;vertical-align:-2px"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+          Manage Profiles
+        </button>
       </div>
     `;
 
@@ -178,30 +233,178 @@ const App = {
   },
 
   showProfileManager() {
-    // Simple prompt-based management for now — can be upgraded to a modal later
-    const profiles = this.state.profiles;
-    const names = profiles.map(p => p.displayName || p.name).join(', ');
-    const action = prompt(`Profiles: ${names}\n\nType a command:\n- "add <name>" to create\n- "remove <name>" to delete\n- "rename <old> <new>" to rename`);
-    if (!action) return;
+    const overlay = document.getElementById('profile-manager-overlay');
+    if (!overlay) return;
 
-    const parts = action.trim().split(/\s+/);
-    const cmd = parts[0].toLowerCase();
+    const closeBtn = overlay.querySelector('#btn-close-profile-manager');
+    if (closeBtn) closeBtn.onclick = () => overlay.classList.add('hidden');
 
-    if (cmd === 'add' && parts[1]) {
-      this.createAndSelectProfile(parts.slice(1).join(' '));
-    } else if (cmd === 'remove' && parts[1]) {
-      const name = parts.slice(1).join(' ');
-      const match = profiles.find(p => p.name === name || p.displayName === name);
-      if (match) {
-        this.api('DELETE', `/profiles/${match.name}`).then(() => this.loadProfile());
+    this._renderProfileManagerList();
+
+    // Add profile form
+    const input = overlay.querySelector('#input-new-profile-name');
+    const addBtn = overlay.querySelector('#btn-add-profile');
+    input.value = '';
+
+    const doAdd = () => {
+      const name = input.value.trim();
+      if (name) {
+        this.createAndSelectProfile(name).then(() => {
+          this._renderProfileManagerList();
+          input.value = '';
+        });
       }
-    } else if (cmd === 'rename' && parts[1] && parts[2]) {
-      const match = profiles.find(p => p.name === parts[1] || p.displayName === parts[1]);
-      if (match) {
-        this.api('POST', '/profiles', { name: match.name, displayName: parts.slice(2).join(' ') })
-          .then(() => this.loadProfile());
-      }
+    };
+    addBtn.onclick = doAdd;
+    input.onkeydown = (e) => { if (e.key === 'Enter') doAdd(); };
+
+    overlay.classList.remove('hidden');
+  },
+
+  _renderProfileManagerList() {
+    const list = document.getElementById('profile-manager-list');
+    if (!list) return;
+    list.innerHTML = '';
+
+    for (const p of this.state.profiles) {
+      const initial = p.name[0].toUpperCase();
+      const row = document.createElement('div');
+      row.className = 'profile-manager-row';
+      row.innerHTML = `
+        <div class="profile-avatar" title="Click to change avatar">${p.avatar || initial}</div>
+        <div class="profile-manager-name">
+          <span class="profile-display-name" contenteditable="true" spellcheck="false">${this.escHtml(p.name)}</span>
+        </div>
+        <div class="profile-manager-actions">
+          <button class="icon-btn danger" title="Delete profile">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
+          </button>
+        </div>
+      `;
+
+      // Avatar click — show emoji picker
+      const avatarEl = row.querySelector('.profile-avatar');
+      avatarEl.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._showAvatarPicker(avatarEl, p);
+      });
+
+      // Inline rename
+      const nameEl = row.querySelector('.profile-display-name');
+      nameEl.addEventListener('blur', () => {
+        const newName = nameEl.textContent.trim();
+        if (newName && newName !== p.name) {
+          this.api('POST', `/profiles/${p.name}/rename`, { newName }).then((updated) => {
+            const wasActive = this.state.profile?.name === p.name;
+            p.name = updated.name;
+            if (wasActive) {
+              this.state.profile = updated;
+              localStorage.setItem('loom:profile', updated.name);
+            }
+            this._renderProfileManagerList();
+            this.renderProfileMenu();
+          }).catch(() => {
+            nameEl.textContent = p.name;
+          });
+        } else {
+          nameEl.textContent = p.name;
+        }
+      });
+      nameEl.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); nameEl.blur(); }
+        if (e.key === 'Escape') { nameEl.textContent = p.name; nameEl.blur(); }
+      });
+
+      // Delete with confirmation
+      const deleteBtn = row.querySelector('.icon-btn.danger');
+      deleteBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const actions = row.querySelector('.profile-manager-actions');
+        actions.innerHTML = `
+          <div class="profile-delete-confirm">
+            <span>Delete?</span>
+            <button class="btn btn-danger btn-confirm-delete">Yes</button>
+            <button class="btn btn-ghost btn-cancel-delete">No</button>
+          </div>
+        `;
+        actions.style.opacity = '1';
+        actions.querySelector('.btn-confirm-delete').addEventListener('click', () => {
+          this.api('DELETE', `/profiles/${p.name}`).then(() => {
+            this.state.profiles = this.state.profiles.filter(x => x.name !== p.name);
+            if (this.state.profile?.name === p.name) {
+              const next = this.state.profiles[0];
+              if (next) this.selectProfile(next);
+            }
+            this._renderProfileManagerList();
+            this.renderProfileMenu();
+          });
+        });
+        actions.querySelector('.btn-cancel-delete').addEventListener('click', () => {
+          this._renderProfileManagerList();
+        });
+      });
+
+      list.appendChild(row);
     }
+
+    if (this.state.profiles.length === 0) {
+      list.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-tertiary);font-size:12px;">No profiles yet</div>';
+    }
+  },
+
+  _showAvatarPicker(anchorEl, profile) {
+    // Remove existing picker
+    document.querySelectorAll('.avatar-picker-popover').forEach(el => el.remove());
+
+    const picker = document.createElement('div');
+    picker.className = 'avatar-picker-popover';
+
+    const grid = document.createElement('div');
+    grid.className = 'avatar-picker-grid';
+
+    for (const emoji of this._avatarEmojis) {
+      const btn = document.createElement('button');
+      btn.textContent = emoji;
+      btn.addEventListener('click', () => {
+        this.api('POST', '/profiles', { name: profile.name, avatar: emoji }).then(() => {
+          profile.avatar = emoji;
+          anchorEl.textContent = emoji;
+          this.renderProfileMenu();
+          picker.remove();
+        });
+      });
+      grid.appendChild(btn);
+    }
+
+    const resetBtn = document.createElement('button');
+    resetBtn.className = 'avatar-picker-reset';
+    resetBtn.textContent = 'Use initial';
+    resetBtn.addEventListener('click', () => {
+      this.api('POST', '/profiles', { name: profile.name, avatar: null }).then(() => {
+        profile.avatar = null;
+        anchorEl.textContent = profile.name[0].toUpperCase();
+        this.renderProfileMenu();
+        picker.remove();
+      });
+    });
+
+    picker.appendChild(grid);
+    picker.appendChild(resetBtn);
+    document.body.appendChild(picker);
+
+    // Position near the anchor
+    const rect = anchorEl.getBoundingClientRect();
+    picker.style.left = Math.min(rect.left, window.innerWidth - 280) + 'px';
+    picker.style.top = (rect.bottom + 6) + 'px';
+
+    // Close on outside click
+    const closeHandler = (e) => {
+      if (!picker.contains(e.target)) {
+        picker.remove();
+        document.removeEventListener('click', closeHandler);
+      }
+    };
+    setTimeout(() => document.addEventListener('click', closeHandler), 0);
   },
 
   // ---- WebSocket ----

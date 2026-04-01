@@ -36,8 +36,9 @@ app.use((req, res, next) => {
 app.get('/', (req, res, next) => {
   const ingressPath = req.headers['x-ingress-path'];
   if (!ingressPath) return next();
+  const safePath = ingressPath.replace(/[^a-zA-Z0-9/_-]/g, '');
   let html = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf-8');
-  html = html.replace('<head>', `<head><base href="${ingressPath}/">`);
+  html = html.replace('<head>', `<head><base href="${safePath}/">`);
   res.type('html').send(html);
 });
 app.use(express.static(path.join(__dirname, 'public')));
@@ -141,7 +142,7 @@ function ensureProfile(name) {
   const profiles = getProfiles();
   let profile = profiles.find(p => p.name === name);
   if (!profile) {
-    profile = { name, displayName: name, avatar: null };
+    profile = { name, avatar: null };
     profiles.push(profile);
     saveProfiles(profiles);
   }
@@ -549,9 +550,23 @@ app.put('/api/config', (req, res) => {
   if (req.body.dockerEnabled !== undefined) {
     cfg.dockerEnabled = req.body.dockerEnabled;
   }
+  if (req.body.host !== undefined) {
+    cfg.host = req.body.host || 'localhost';
+  }
   saveAppConfig(cfg);
   setupWatcher();
   res.json(cfg);
+});
+
+// Restart server (used after config changes that require restart, e.g. host binding)
+app.post('/api/restart', (req, res) => {
+  res.json({ ok: true });
+  // Touch server.js to trigger node --watch restart
+  setTimeout(() => {
+    const serverFile = path.join(__dirname, 'server.js');
+    const now = new Date();
+    fs.utimesSync(serverFile, now, now);
+  }, 200);
 });
 
 // ---------------------------------------------------------------------------
@@ -1409,7 +1424,7 @@ app.get('/api/profiles', (req, res) => {
 
 // Create or update a profile
 app.post('/api/profiles', (req, res) => {
-  const { name, displayName, avatar } = req.body;
+  const { name, avatar } = req.body;
   if (!name) return res.status(400).json({ error: 'name required' });
   const sanitized = name.replace(/[^a-zA-Z0-9_-]/g, '');
   if (!sanitized) return res.status(400).json({ error: 'Invalid profile name' });
@@ -1417,14 +1432,41 @@ app.post('/api/profiles', (req, res) => {
   const profiles = getProfiles();
   const existing = profiles.find(p => p.name === sanitized);
   if (existing) {
-    if (displayName !== undefined) existing.displayName = displayName;
     if (avatar !== undefined) existing.avatar = avatar;
   } else {
-    profiles.push({ name: sanitized, displayName: displayName || sanitized, avatar: avatar || null });
+    profiles.push({ name: sanitized, avatar: avatar || null });
   }
   saveProfiles(profiles);
   ensureProfileDirs(sanitized);
   res.json(profiles.find(p => p.name === sanitized));
+});
+
+// Rename a profile
+app.post('/api/profiles/:name/rename', (req, res) => {
+  const oldName = req.params.name;
+  const { newName } = req.body;
+  if (!newName) return res.status(400).json({ error: 'newName required' });
+  const sanitized = newName.replace(/[^a-zA-Z0-9_-]/g, '');
+  if (!sanitized) return res.status(400).json({ error: 'Invalid profile name' });
+
+  const profiles = getProfiles();
+  const existing = profiles.find(p => p.name === oldName);
+  if (!existing) return res.status(404).json({ error: 'Profile not found' });
+  if (profiles.find(p => p.name === sanitized && p.name !== oldName)) {
+    return res.status(409).json({ error: 'Profile name already taken' });
+  }
+
+  // Rename the profile directory if it exists
+  const oldDir = path.join(PROFILES_DIR, oldName);
+  const newDir = path.join(PROFILES_DIR, sanitized);
+  if (fs.existsSync(oldDir) && !fs.existsSync(newDir)) {
+    fs.renameSync(oldDir, newDir);
+  }
+
+  existing.name = sanitized;
+  saveProfiles(profiles);
+  ensureProfileDirs(sanitized);
+  res.json(existing);
 });
 
 // Delete a profile
@@ -1571,7 +1613,7 @@ wss.on('connection', (ws) => {
 
             if (!path.isAbsolute(shellCmd)) {
               try {
-                shellCmd = execSync(`which ${shellCmd}`, { encoding: 'utf-8' }).trim();
+                shellCmd = execSync('which ' + shellCmd.replace(/[^a-zA-Z0-9_\-/.]/g, ''), { encoding: 'utf-8' }).trim();
               } catch {
                 shellCmd = '/bin/zsh';
                 shellArgs = [];
@@ -1733,9 +1775,15 @@ function setupDevWatcher() {
 // ---------------------------------------------------------------------------
 
 const PORT = process.env.PORT || 3000;
+const HOST = process.env.HOST || getAppConfig().host || 'localhost';
 
-server.listen(PORT, () => {
-  console.log(`\n  Loom running at http://localhost:${PORT}\n`);
+server.listen(PORT, HOST, () => {
+  console.log(`\n  Loom running at http://${HOST}:${PORT}`);
+  if (HOST === 'localhost' || HOST === '127.0.0.1') {
+    console.log(`  To expose on LAN, set host to 0.0.0.0 in Settings or run: HOST=0.0.0.0 npm run dev\n`);
+  } else {
+    console.log('');
+  }
   ensureDir(getAppConfig().projectDirectory);
   ensureTmuxConfig();
   applyTmuxOptions();

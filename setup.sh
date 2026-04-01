@@ -54,7 +54,34 @@ mkdir -p "$LOOM_HOME"
 echo "Ensured ~/.loom exists."
 
 # ---------------------------------------------------------------------------
-# 4. Claude Code hooks — merge into ~/.claude/settings.json
+# 4. LAN access
+# ---------------------------------------------------------------------------
+echo ""
+CONFIG_FILE="$LOOM_HOME/config.json"
+if [ -f "$CONFIG_FILE" ]; then
+  current_host=$(jq -r '.host // empty' "$CONFIG_FILE")
+else
+  current_host=""
+fi
+
+if [ -z "$current_host" ]; then
+  read -p "Allow LAN access? Other machines can discover and connect to Loom. (y/N): " LAN_CHOICE
+  if [ "$LAN_CHOICE" = "y" ] || [ "$LAN_CHOICE" = "Y" ]; then
+    if [ -f "$CONFIG_FILE" ]; then
+      jq '.host = "0.0.0.0"' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+    else
+      echo '{"host":"0.0.0.0"}' | jq . > "$CONFIG_FILE"
+    fi
+    echo "  LAN access enabled (host: 0.0.0.0)"
+  else
+    echo "  LAN access disabled (localhost only). Change in Settings later."
+  fi
+else
+  echo "LAN access already configured (host: $current_host)"
+fi
+
+# ---------------------------------------------------------------------------
+# 5. Claude Code hooks — merge into ~/.claude/settings.json
 # ---------------------------------------------------------------------------
 echo ""
 echo "Configuring Claude Code hooks..."
@@ -98,7 +125,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 5. Statusline script
+# 6. Statusline script
 # ---------------------------------------------------------------------------
 echo ""
 STATUSLINE_SRC="$LOOM_DIR/statusline-command.sh"
@@ -124,7 +151,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 6. Generate start-loom.sh for this machine's path
+# 7. Generate start-loom.sh for this machine's path
 # ---------------------------------------------------------------------------
 echo ""
 echo "Generating start-loom.sh for this install path..."
