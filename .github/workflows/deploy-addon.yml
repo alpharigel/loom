@@ -61,16 +61,19 @@ jobs:
       - name: Update addon-repo branch
         run: |
           VERSION="${{ steps.version.outputs.version }}"
+          OWNER="${{ github.repository_owner }}"
           TMPDIR=$(mktemp -d)
 
           cat > "$TMPDIR/repository.yaml" << EOF
           name: Loom Add-ons
           url: https://github.com/${{ github.repository }}
-          maintainer: ${{ github.repository_owner }}
+          maintainer: ${OWNER}
           EOF
 
           mkdir -p "$TMPDIR/loom"
           cp deploy/ha-addon/config.yaml "$TMPDIR/loom/config.yaml"
+          # Rewrite placeholders with actual owner
+          sed -i "s|{github-owner}|${OWNER}|g" "$TMPDIR/loom/config.yaml"
 
           cd "$TMPDIR"
           git init
