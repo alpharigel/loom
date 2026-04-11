@@ -160,6 +160,18 @@
         <p class="field-hint">All projects and worktrees will be stored in this directory.</p>
 
         <div style="margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border);">
+          <label class="field-label">Terminal Shell</label>
+          <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+            <select id="input-default-shell" class="text-input" style="flex: 1;"></select>
+          </div>
+          <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+            <input type="text" id="input-custom-shell" class="text-input" style="flex: 1;" placeholder="Or enter a custom shell path…">
+            <button id="btn-save-shell" class="btn btn-primary">Save</button>
+          </div>
+          <p class="field-hint" id="shell-hint">Default shell used when opening new terminals. Discovered shells appear in the dropdown; enter a custom path to use something else.</p>
+        </div>
+
+        <div style="margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border);">
           <label class="field-label">LAN Access</label>
           <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
             <label class="toggle-switch">

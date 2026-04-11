@@ -47,6 +47,58 @@ app.use('/vendor/xterm-addon-fit', express.static(path.join(__dirname, 'node_mod
 app.use('/vendor/xterm-addon-web-links', express.static(path.join(__dirname, 'node_modules/xterm-addon-web-links')));
 
 // ---------------------------------------------------------------------------
+// Platform detection & shell discovery
+// ---------------------------------------------------------------------------
+
+const IS_WINDOWS = process.platform === 'win32';
+
+// Detect tmux once at startup; sticky terminal sessions depend on it.
+const HAS_TMUX = (() => {
+  try {
+    execSync(IS_WINDOWS ? 'where tmux' : 'command -v tmux', { stdio: 'pipe' });
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
+// Candidate shells probed at startup. Order matters: first-found becomes the
+// default when the user hasn't explicitly picked one in settings.
+const SHELL_CANDIDATES = IS_WINDOWS
+  ? [
+      { label: 'PowerShell 7 (pwsh)', path: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe' },
+      { label: 'Windows PowerShell', path: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe' },
+      { label: 'Git Bash', path: 'C:\\Program Files\\Git\\usr\\bin\\bash.exe' },
+      { label: 'Git Bash (bin)', path: 'C:\\Program Files\\Git\\bin\\bash.exe' },
+      { label: 'Command Prompt', path: process.env.ComSpec || 'C:\\Windows\\System32\\cmd.exe' },
+      { label: 'WSL', path: 'C:\\Windows\\System32\\wsl.exe' },
+    ]
+  : [
+      { label: 'zsh', path: '/bin/zsh' },
+      { label: 'bash', path: '/bin/bash' },
+      { label: 'fish', path: '/usr/bin/fish' },
+      { label: 'sh', path: '/bin/sh' },
+    ];
+
+function discoverShells() {
+  const found = [];
+  for (const c of SHELL_CANDIDATES) {
+    if (fs.existsSync(c.path)) found.push(c);
+  }
+  // Also honor $SHELL if it points at something real and not already listed.
+  if (process.env.SHELL && fs.existsSync(process.env.SHELL) && !found.some(s => s.path === process.env.SHELL)) {
+    found.push({ label: `$SHELL (${path.basename(process.env.SHELL)})`, path: process.env.SHELL });
+  }
+  return found;
+}
+
+function platformDefaultShell() {
+  const shells = discoverShells();
+  if (shells.length) return shells[0].path;
+  return IS_WINDOWS ? (process.env.ComSpec || 'cmd.exe') : (process.env.SHELL || '/bin/sh');
+}
+
+// ---------------------------------------------------------------------------
 // Config helpers
 // ---------------------------------------------------------------------------
 
@@ -95,10 +147,12 @@ function getAppConfig() {
   const defaults = {
     projectDirectory: process.env.LOOM_PROJECT_DIR || path.join(os.homedir(), 'Dev'),
     dockerEnabled: false,
+    defaultShell: platformDefaultShell(),
   };
   const cfg = readJSON(APP_CONFIG_FILE, defaults);
   if (!cfg.projectDirectory) cfg.projectDirectory = defaults.projectDirectory;
   if (cfg.dockerEnabled === undefined) cfg.dockerEnabled = false;
+  if (!cfg.defaultShell) cfg.defaultShell = defaults.defaultShell;
   return cfg;
 }
 
@@ -541,6 +595,16 @@ app.get('/api/config', (req, res) => {
   res.json(getAppConfig());
 });
 
+app.get('/api/shells', (req, res) => {
+  const cfg = getAppConfig();
+  res.json({
+    shells: discoverShells(),
+    current: cfg.defaultShell,
+    hasTmux: HAS_TMUX,
+    platform: process.platform,
+  });
+});
+
 app.put('/api/config', (req, res) => {
   const cfg = getAppConfig();
   if (req.body.projectDirectory) {
@@ -552,6 +616,9 @@ app.put('/api/config', (req, res) => {
   }
   if (req.body.host !== undefined) {
     cfg.host = req.body.host || 'localhost';
+  }
+  if (typeof req.body.defaultShell === 'string' && req.body.defaultShell.trim()) {
+    cfg.defaultShell = req.body.defaultShell.trim();
   }
   saveAppConfig(cfg);
   setupWatcher();
@@ -625,13 +692,23 @@ app.get('/api/projects', (req, res) => {
   });
 });
 
-// Lazy-load worktrees for a single project (includes git worktree list)
+// Lazy-load worktrees for a single project (includes git worktree list).
+// The main working tree (itemDir itself) is filtered out — the project row
+// in the explorer already represents it, so surfacing it again as a
+// "task" worktree is just noise.
 app.get('/api/projects/:name/worktrees', (req, res) => {
   const section = req.query.section || 'projects';
   const itemDir = getItemDir(section, req.params.name, req.profileName);
   if (!fs.existsSync(itemDir)) return res.status(404).json({ error: 'Item not found' });
 
   const worktreeDir = getWorktreeDir(section, req.params.name);
+  const mainPath = path.resolve(itemDir);
+  const samePath = (a, b) => {
+    const na = path.resolve(a);
+    const nb = path.resolve(b);
+    return IS_WINDOWS ? na.toLowerCase() === nb.toLowerCase() : na === nb;
+  };
+
   let worktrees = [];
 
   if (fs.existsSync(worktreeDir)) {
@@ -640,10 +717,11 @@ app.get('/api/projects/:name/worktrees', (req, res) => {
       .map(d => ({ branch: d.name, path: path.join(worktreeDir, d.name) }));
   }
 
-  // Also check git's own worktree list
+  // Also check git's own worktree list, but skip the main working tree.
   const gitWorktrees = getWorktrees(itemDir);
   for (const gwt of gitWorktrees) {
-    if (!worktrees.find(w => w.path === gwt.path)) {
+    if (samePath(gwt.path, mainPath)) continue;
+    if (!worktrees.find(w => samePath(w.path, gwt.path))) {
       worktrees.push({ branch: gwt.branch || path.basename(gwt.path), path: gwt.path });
     }
   }
@@ -1521,10 +1599,13 @@ wss.on('connection', (ws) => {
       case 'terminal:create': {
         const id = msg.id;
         const cwd = msg.cwd || os.homedir();
-        const shell = msg.cmd || process.env.SHELL || '/bin/zsh';
+        const appCfgForShell = getAppConfig();
+        const shell = msg.cmd || appCfgForShell.defaultShell || process.env.SHELL || platformDefaultShell();
         const useDocker = msg.docker || false;
         const projectName = msg.projectName || null;
-        const useSticky = msg.sticky || false;
+        // Sticky sessions require tmux; silently fall through when unavailable
+        // (e.g. native Windows) so terminals still work, just without persistence.
+        const useSticky = (msg.sticky || false) && HAS_TMUX;
 
         log(`terminal:create id=${id} cwd=${cwd} shell=${shell} docker=${useDocker} sticky=${useSticky}`);
 
@@ -1593,30 +1674,28 @@ wss.on('connection', (ws) => {
               env: { ...process.env, TERM: 'xterm-256color', HOME: os.homedir() },
             });
 
-            // If this is a brand-new session and we have a command, send it
-            if (!alreadyExists && shell !== process.env.SHELL && shell !== '/bin/zsh') {
+            // If this is a brand-new session and the caller supplied an
+            // explicit command (not a raw shell fallback), type it into tmux.
+            if (!alreadyExists && msg.cmd) {
               setTimeout(() => {
-                try { ptyProcess.write(shell + '\n'); } catch { /* ignore */ }
+                try { ptyProcess.write(msg.cmd + '\n'); } catch { /* ignore */ }
               }, 300);
             }
           } else {
-            // Local mode: spawn shell directly
-            let shellCmd, shellArgs;
-            if (shell.includes(' ')) {
-              const parts = shell.split(/\s+/);
-              shellCmd = parts[0];
-              shellArgs = parts.slice(1);
-            } else {
-              shellCmd = shell;
-              shellArgs = [];
-            }
-
-            if (!path.isAbsolute(shellCmd)) {
+            // Local mode: spawn shell directly.
+            // If `shell` is an existing absolute path (possibly with spaces,
+            // e.g. "C:\\Program Files\\Git\\usr\\bin\\bash.exe"), use it as-is.
+            // Otherwise try to resolve via PATH lookup (which on unix, where on win).
+            let shellCmd = shell;
+            let shellArgs = [];
+            if (!path.isAbsolute(shellCmd) || !fs.existsSync(shellCmd)) {
+              // Bare name or not found: attempt PATH resolution
               try {
-                shellCmd = execSync('which ' + shellCmd.replace(/[^a-zA-Z0-9_\-/.]/g, ''), { encoding: 'utf-8' }).trim();
+                const lookup = IS_WINDOWS ? `where ${shellCmd}` : `command -v ${shellCmd}`;
+                const resolved = execSync(lookup, { encoding: 'utf-8' }).trim().split(/\r?\n/)[0];
+                if (resolved) shellCmd = resolved;
               } catch {
-                shellCmd = '/bin/zsh';
-                shellArgs = [];
+                shellCmd = platformDefaultShell();
               }
             }
 

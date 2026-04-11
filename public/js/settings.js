@@ -21,6 +21,22 @@ const Settings = {
       if (e.key === 'Enter') this.save();
     });
 
+    // Shell selector
+    document.getElementById('input-default-shell').addEventListener('change', (e) => {
+      const val = e.target.value;
+      if (val) this.saveShell(val);
+    });
+    document.getElementById('btn-save-shell').addEventListener('click', () => {
+      const custom = document.getElementById('input-custom-shell').value.trim();
+      if (custom) this.saveShell(custom);
+    });
+    document.getElementById('input-custom-shell').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        const val = e.target.value.trim();
+        if (val) this.saveShell(val);
+      }
+    });
+
     // LAN access toggle
     document.getElementById('input-lan-enabled').addEventListener('change', (e) => {
       this.toggleLan(e.target.checked);
@@ -53,12 +69,62 @@ const Settings = {
       App.state.projectDirectory = cfg.projectDirectory;
       App.state.dockerEnabled = cfg.dockerEnabled || false;
       App.state.lanEnabled = cfg.host === '0.0.0.0';
+      App.state.defaultShell = cfg.defaultShell || '';
       document.getElementById('input-project-dir').value = cfg.projectDirectory;
       document.getElementById('input-lan-enabled').checked = App.state.lanEnabled;
       document.getElementById('input-docker-enabled').checked = cfg.dockerEnabled || false;
       this.refreshDockerStatus();
+      this.refreshShells();
     } catch (err) {
       App.toast('Failed to load config: ' + err.message, 'error');
+    }
+  },
+
+  async refreshShells() {
+    try {
+      const info = await App.api('GET', '/shells');
+      const select = document.getElementById('input-default-shell');
+      const hint = document.getElementById('shell-hint');
+      select.innerHTML = '';
+
+      // Build options from discovered shells, plus an entry for current if it
+      // doesn't match any discovered path (user-defined custom shell).
+      const shells = info.shells || [];
+      const current = info.current || '';
+      let matched = false;
+      for (const s of shells) {
+        const opt = document.createElement('option');
+        opt.value = s.path;
+        opt.textContent = `${s.label} — ${s.path}`;
+        if (s.path === current) { opt.selected = true; matched = true; }
+        select.appendChild(opt);
+      }
+      if (current && !matched) {
+        const opt = document.createElement('option');
+        opt.value = current;
+        opt.textContent = `Custom — ${current}`;
+        opt.selected = true;
+        select.appendChild(opt);
+      }
+
+      const stickyNote = info.hasTmux
+        ? 'tmux detected — terminals use sticky sessions that survive reloads.'
+        : 'tmux not found — terminals will spawn directly (no persistence across restarts).';
+      hint.textContent = `Default shell used when opening new terminals. ${stickyNote}`;
+    } catch (err) {
+      console.warn('Failed to load shells:', err);
+    }
+  },
+
+  async saveShell(shellPath) {
+    try {
+      const cfg = await App.api('PUT', '/config', { defaultShell: shellPath });
+      App.state.defaultShell = cfg.defaultShell;
+      document.getElementById('input-custom-shell').value = '';
+      App.toast('Shell updated — open new terminals to apply', 'success');
+      this.refreshShells();
+    } catch (err) {
+      App.toast('Failed to save shell: ' + err.message, 'error');
     }
   },
 
@@ -69,6 +135,7 @@ const Settings = {
     document.getElementById('modal-overlay').classList.remove('hidden');
     document.getElementById('input-project-dir').focus();
     this.refreshDockerStatus();
+    this.refreshShells();
   },
 
   close() {
