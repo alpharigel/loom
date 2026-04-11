@@ -1,7 +1,7 @@
 ARG BUILD_FROM
 
 # Stage 1: Install Node.js dependencies and compile native modules (node-pty)
-FROM node:20-slim AS builder
+FROM node:22-slim AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 make g++ git \
@@ -14,11 +14,11 @@ RUN npm ci --omit=dev
 # Stage 2: Runtime on HA base image
 FROM ${BUILD_FROM}
 
-# Install Node.js 20 and runtime dependencies
+# Install Node.js 22 and runtime dependencies
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         curl ca-certificates gnupg \
-    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends \
         nodejs \
         nginx \

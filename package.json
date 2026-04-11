@@ -5,7 +5,7 @@
   "main": "server.js",
   "license": "MIT",
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   },
   "scripts": {
     "start": "node server.js",
@@ -27,7 +27,7 @@
     "chokidar": "^4.0.0",
     "express": "^4.21.0",
     "marked": "^15.0.0",
-    "node-pty": "^0.10.1",
+    "node-pty": "npm:@homebridge/node-pty-prebuilt-multiarch@^0.13.1",
     "ws": "^8.18.0",
     "xterm": "^5.3.0",
     "xterm-addon-fit": "^0.8.0",

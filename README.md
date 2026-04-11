@@ -18,7 +18,7 @@ A workspace manager for agent-based development. Three-pane IDE with integrated 
 ```bash
 git clone https://github.com/alpharigel/loom.git
 cd loom
-./setup.sh
+./setup.sh       # macOS / Linux / WSL
 npm run dev
 ```
 
@@ -26,7 +26,7 @@ Open http://localhost:3000 in your browser.
 
 ### Prerequisites
 
-- Node.js 20+
+- **Node.js 22+** (required — see [Why Node 22](#why-node-22))
 - tmux
 - git
 - jq
@@ -39,6 +39,37 @@ Open http://localhost:3000 in your browser.
 4. Configures Claude Code hooks (agent status webhook)
 5. Installs the statusline script
 6. Generates `start-loom.sh` for your install path
+
+## Platform Support
+
+Loom runs natively on **macOS**, **Linux**, **WSL2**, and **Windows**. No C++ build tools are required on any platform — `node-pty` is vendored as `@homebridge/node-pty-prebuilt-multiarch`, which ships prebuilt binaries for darwin, linux, and win32.
+
+### Windows (native)
+
+```powershell
+nvm install 22
+nvm use 22
+git clone https://github.com/alpharigel/loom.git
+cd loom
+npm install
+npm start
+```
+
+Terminal sessions use Windows ConPTY. `setup.sh` is a bash script and won't run under plain PowerShell — skip it on Windows and use `npm install` directly (the setup script's Claude Code hooks can be configured manually if you want them).
+
+### WSL2
+
+Treat it as a normal Linux install. Keep the clone on the Linux filesystem (e.g. `~/Dev/loom`), not under `/mnt/c/...`, for fast file watching. If you also run Loom on the Windows host, use two separate clones — they can't share `node_modules` across the platform boundary, and you'll want different `PORT` values since WSL2 forwards localhost to the Windows host.
+
+```bash
+PORT=3001 npm start    # avoid colliding with a Windows instance on 3000
+```
+
+`~/.loom` is per-OS, so configs and profiles stay isolated between the two sides automatically.
+
+### Why Node 22
+
+Node 22 is the current Active LTS. The `engines` field enforces `>=22.0.0` so contributors and CI land on a consistent modern runtime.
 
 ## Configuration
 
@@ -86,7 +117,7 @@ Profiles are local identities with no authentication. Each profile gets its own 
 
 ## Docker Isolation
 
-Enable Docker in Settings to run each project in its own container. The base image (`docker/Dockerfile`) includes Node.js 20, git, zsh, GitHub CLI, and Claude Code CLI. Containers mount the project workspace and pass through API keys.
+Enable Docker in Settings to run each project in its own container. The base image (`docker/Dockerfile`) includes Node.js 22, git, zsh, GitHub CLI, and Claude Code CLI. Containers mount the project workspace and pass through API keys.
 
 ## Home Assistant Add-on
 
