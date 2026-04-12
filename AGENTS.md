@@ -45,6 +45,15 @@ Works as a normal Linux install. Keep the clone on the Linux filesystem (e.g. `~
 ### Running Windows + WSL simultaneously
 Two separate clones, different `PORT` values (WSL2 forwards localhost to the Windows host, so both can't bind 3000). `~/.loom` is per-OS so configs and profiles stay isolated automatically.
 
+For the machine-switcher dropdown to find the peer across the WSL2↔Windows boundary, enable **mirrored networking mode** (Windows 11 only). WSL2's default NAT network blocks UDP multicast, so mDNS (Bonjour) never reaches the host and each instance only sees itself. Create `C:\Users\<you>\.wslconfig` with:
+
+```ini
+[wsl2]
+networkingMode=mirrored
+```
+
+Then run `wsl --shutdown` from PowerShell and restart WSL. With mirrored mode, WSL shares the host network stack and `_loom._tcp` advertisements cross freely in both directions.
+
 ## Architecture
 
 ### Server (`server.js`)

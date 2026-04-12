@@ -1460,7 +1460,7 @@ app.get('/api/identity', (req, res) => {
   const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf-8'));
   res.json({
     hostname: os.hostname(),
-    port: parseInt(process.env.PORT || 3000),
+    port: boundPort,
     os: process.platform,
     user: os.userInfo().username,
     version: pkg.version,
@@ -1853,42 +1853,61 @@ function setupDevWatcher() {
 // Start
 // ---------------------------------------------------------------------------
 
-const PORT = process.env.PORT || 3000;
+const START_PORT = parseInt(process.env.PORT || 3000);
 const HOST = process.env.HOST || getAppConfig().host || 'localhost';
+const MAX_PORT_ATTEMPTS = 10;
+let boundPort = START_PORT;
 
-server.listen(PORT, HOST, () => {
-  console.log(`\n  Loom running at http://${HOST}:${PORT}`);
-  if (HOST === 'localhost' || HOST === '127.0.0.1') {
-    console.log(`  To expose on LAN, set host to 0.0.0.0 in Settings or run: HOST=0.0.0.0 npm run dev\n`);
-  } else {
-    console.log('');
-  }
-  ensureDir(getAppConfig().projectDirectory);
-  ensureTmuxConfig();
-  applyTmuxOptions();
-  setupWatcher();
-  setupDevWatcher();
-
-  // Advertise via mDNS for peer discovery (skip in HA add-on mode)
-  if (!process.env.LOOM_HA_MODE) {
-    try {
-      bonjourInstance = createBonjour();
-      bonjourInstance.publish({
-        name: `Loom-${os.hostname()}-${PORT}`,
-        type: 'loom',
-        port: parseInt(PORT),
-        txt: {
-          hostname: os.hostname(),
-          os: process.platform,
-          user: os.userInfo().username,
-        },
-      });
-      console.log(`  mDNS: advertising as Loom-${os.hostname()}-${PORT} (_loom._tcp)\n`);
-    } catch (err) {
-      console.warn('  mDNS: failed to advertise:', err.message);
+function listenWithFallback(port, attemptsLeft) {
+  const onError = (err) => {
+    if (err.code === 'EADDRINUSE' && attemptsLeft > 1) {
+      console.warn(`  Port ${port} is in use, trying ${port + 1}...`);
+      server.removeListener('error', onError);
+      listenWithFallback(port + 1, attemptsLeft - 1);
+    } else {
+      console.error(`\n  Failed to bind to ${HOST}:${port} — ${err.message}\n`);
+      process.exit(1);
     }
-  }
-});
+  };
+  server.once('error', onError);
+  server.listen(port, HOST, () => {
+    server.removeListener('error', onError);
+    boundPort = port;
+    console.log(`\n  Loom running at http://${HOST}:${boundPort}`);
+    if (HOST === 'localhost' || HOST === '127.0.0.1') {
+      console.log(`  To expose on LAN, set host to 0.0.0.0 in Settings or run: HOST=0.0.0.0 npm run dev\n`);
+    } else {
+      console.log('');
+    }
+    ensureDir(getAppConfig().projectDirectory);
+    ensureTmuxConfig();
+    applyTmuxOptions();
+    setupWatcher();
+    setupDevWatcher();
+
+    // Advertise via mDNS for peer discovery (skip in HA add-on mode)
+    if (!process.env.LOOM_HA_MODE) {
+      try {
+        bonjourInstance = createBonjour();
+        bonjourInstance.publish({
+          name: `Loom-${os.hostname()}-${boundPort}`,
+          type: 'loom',
+          port: boundPort,
+          txt: {
+            hostname: os.hostname(),
+            os: process.platform,
+            user: os.userInfo().username,
+          },
+        });
+        console.log(`  mDNS: advertising as Loom-${os.hostname()}-${boundPort} (_loom._tcp)\n`);
+      } catch (err) {
+        console.warn('  mDNS: failed to advertise:', err.message);
+      }
+    }
+  });
+}
+
+listenWithFallback(START_PORT, MAX_PORT_ATTEMPTS);
 
 // Graceful shutdown — unpublish mDNS (don't call process.exit, let node --watch handle restarts)
 function cleanupMdns() {

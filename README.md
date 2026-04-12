@@ -67,6 +67,15 @@ PORT=3001 npm start    # avoid colliding with a Windows instance on 3000
 
 `~/.loom` is per-OS, so configs and profiles stay isolated between the two sides automatically.
 
+**Cross-boundary peer discovery (Windows 11).** WSL2's default NAT network blocks UDP multicast, so the machine-switcher dropdown won't find a Loom instance running on the Windows host (and vice versa) — each side only sees itself. Enable **mirrored networking mode** to fix this: create `C:\Users\<you>\.wslconfig` with
+
+```ini
+[wsl2]
+networkingMode=mirrored
+```
+
+then run `wsl --shutdown` from PowerShell and restart WSL. With mirrored mode, WSL shares the Windows host's network stack and mDNS (`_loom._tcp`) crosses freely in both directions.
+
 ### Why Node 22
 
 Node 22 is the current Active LTS. The `engines` field enforces `>=22.0.0` so contributors and CI land on a consistent modern runtime.
