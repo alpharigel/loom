@@ -519,12 +519,16 @@ const App = {
       } catch { /* ignore — profile will work without it */ }
     }
 
-    // Close existing WS
-    if (this.ws) { this.ws.onclose = null; this.ws.close(); }
-    this._wsConnectedOnce = false;
-    this.connectWebSocket();
-    // Clear selection and refresh
+    // Clear selection first so ws:reconnected cleanup doesn't try to
+    // re-create a terminal for a project that belongs to the old host.
     this.selectProject(null);
+
+    // Close existing WS — leave _wsConnectedOnce=true so the new ws's
+    // onopen fires ws:reconnected, which disposes stale terminal state
+    // from the previous host.
+    if (this.ws) { this.ws.onclose = null; this.ws.close(); }
+    this.connectWebSocket();
+
     Projects.refresh();
     this.loadIdentityAndPeers();
   },
