@@ -36,6 +36,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Seed GHCR package (first-run workaround)
+        run: |
+          # First-time push to a new GHCR package fails with 403 when
+          # buildx tries to cross-repo blob-mount layers from the HA base
+          # image into the as-yet-nonexistent destination repo. Seeding
+          # the package with a tiny image pulled from Docker Hub (no
+          # GHCR cross-mount involved) creates the package so subsequent
+          # pushes have somewhere to mount into. Safe to re-run.
+          docker pull busybox:latest
+          docker tag busybox:latest ghcr.io/${{ github.repository_owner }}/loom-addon-aarch64:seed
+          docker push ghcr.io/${{ github.repository_owner }}/loom-addon-aarch64:seed || true
+
       - name: Build and push (aarch64)
         uses: docker/build-push-action@v6
         with:
