@@ -43,6 +43,8 @@ jobs:
           file: deploy/ha-addon/Dockerfile
           platforms: linux/arm64
           push: true
+          provenance: false
+          sbom: false
           build-args: BUILD_FROM=ghcr.io/home-assistant/aarch64-base-debian:bookworm
           tags: |
             ghcr.io/${{ github.repository_owner }}/loom-addon-aarch64:${{ steps.version.outputs.version }}
