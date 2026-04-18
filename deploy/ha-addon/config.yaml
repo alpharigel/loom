@@ -1,6 +1,6 @@
 name: "Loom"
 description: "IDE-like workspace manager with terminals, file browsing, and GitHub integration"
-version: "0.1.4"
+version: "0.1.5"
 slug: "loom"
 image: "ghcr.io/{github-owner}/loom-addon-{arch}"
 url: "https://github.com/{github-owner}/loom"
