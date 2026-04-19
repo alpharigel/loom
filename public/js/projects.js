@@ -21,12 +21,21 @@ const Projects = {
     // Re-highlight on project selection
     App.on('project:selected', () => this.highlightActive());
 
-    // Initial load
-    this.refresh();
+    // Initial load — but skip if no profile is chosen yet. Rendering the
+    // no-profile result would briefly show the global scratch/agents dirs,
+    // then flip to the profile-scoped view once the user picks, which looks
+    // like the whole sidebar refreshing and swapping content.
+    // selectProfile() fires its own refresh(), so we pick up cleanly then.
+    if (App.state.profile) {
+      this.refresh();
+    }
 
     // Safety-net polling: catch anything fs:changed misses (e.g. new
-    // worktrees nested past the watcher depth).
-    setInterval(() => this.refresh(), 5000);
+    // worktrees nested past the watcher depth). Also skip when there's no
+    // profile — we'd just re-trigger the same flash described above.
+    setInterval(() => {
+      if (App.state.profile) this.refresh();
+    }, 5000);
   },
 
   _lastFingerprint: null,

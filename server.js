@@ -555,10 +555,17 @@ function sanitize(name) {
 // Git helpers
 // ---------------------------------------------------------------------------
 
+// Direct filesystem check instead of shelling out to git. This avoids
+// spawning a subprocess per directory on every sidebar refresh, which
+// exhausts file descriptors on long-running servers (macOS default soft
+// limit is 256) and silently breaks project detection.
+// Handles both plain git repos (.git is a dir) and git worktrees
+// (.git is a file pointing at the real gitdir).
 function isGitRepo(dir) {
   try {
-    execSync('git rev-parse --is-inside-work-tree', { cwd: dir, stdio: 'pipe' });
-    return true;
+    const gitPath = path.join(dir, '.git');
+    const st = fs.lstatSync(gitPath);
+    return st.isDirectory() || st.isFile();
   } catch {
     return false;
   }
@@ -1825,18 +1832,48 @@ function setupWatcher() {
   const appCfg = getAppConfig();
   const projDir = appCfg.projectDirectory;
 
-  const dirsToWatch = [projDir, PROFILES_DIR, SKILLS_DIR, WORKTREES_DIR]
-    .filter(d => fs.existsSync(d));
-  if (dirsToWatch.length === 0) return;
+  // Shallow depth for the projects root — we only need to notice new
+  // top-level projects appearing/disappearing. Descending into each
+  // project's subtree pulls in things like data/, dist/, build/ caches
+  // that balloon to tens of thousands of files and exhaust the process's
+  // file-descriptor budget (observed: 47k open REG files from a single
+  // research-cache directory, breaking every subsequent child_process
+  // spawn with EBADF).
+  //
+  // WORKTREES_DIR keeps depth 3 because the sidebar expects to see new
+  // `<section>/<project>/<branch>` worktrees appear immediately.
+  const commonIgnored = [
+    /(^|[\/\\])\..(?!archive)/, // dotfiles except .archive
+    /node_modules/,
+    /[\/\\](data|dist|build|coverage|target|\.next|\.nuxt|\.cache|__pycache__|out|tmp)([\/\\]|$)/,
+    /\.(log|lock|pack|idx)$/,
+  ];
 
-  watcher = chokidar.watch(dirsToWatch, {
-    depth: 3,
-    ignoreInitial: true,
-    ignored: [
-      /(^|[\/\\])\..(?!archive)/, // ignore dotfiles except .archive
-      /node_modules/,
-    ],
-  });
+  const watchers = [];
+  const shallowRoots = [projDir, PROFILES_DIR, SKILLS_DIR].filter(d => fs.existsSync(d));
+  if (shallowRoots.length) {
+    watchers.push(chokidar.watch(shallowRoots, {
+      depth: 1,
+      ignoreInitial: true,
+      ignored: commonIgnored,
+    }));
+  }
+  if (fs.existsSync(WORKTREES_DIR)) {
+    watchers.push(chokidar.watch(WORKTREES_DIR, {
+      depth: 3,
+      ignoreInitial: true,
+      ignored: commonIgnored,
+    }));
+  }
+  if (watchers.length === 0) return;
+
+  // Compose into a single watcher-like object so the rest of this
+  // function can keep using `.on()` uniformly.
+  watcher = {
+    _watchers: watchers,
+    on(event, fn) { watchers.forEach(w => w.on(event, fn)); return this; },
+    close() { return Promise.all(watchers.map(w => w.close())); },
+  };
 
   const notify = (type, filePath) => {
     clearTimeout(watchDebounce);
