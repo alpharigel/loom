@@ -55,12 +55,17 @@ const TerminalManager = {
       }
     });
 
-    // Listen for agent status updates from server (via Claude Code hooks)
+    // Listen for agent status updates from server (via Claude Code hooks).
+    // A null status means the server cleared the entry (e.g. another tab
+    // clicked into the project) — propagate the clear to this tab too.
     App.on('agent:status', (msg) => {
-      if (msg.path && msg.status) {
+      if (!msg.path) return;
+      if (msg.status) {
         this.agentStatus.set(msg.path, msg.status);
-        App.emit('agent:status:updated', { path: msg.path, status: msg.status });
+      } else {
+        this.agentStatus.delete(msg.path);
       }
+      App.emit('agent:status:updated', { path: msg.path, status: msg.status || null });
     });
 
     // Load initial statuses from server
@@ -421,6 +426,9 @@ const TerminalManager = {
     if (status === 'done' || status === 'error') {
       this.agentStatus.delete(path);
       App.emit('agent:status:updated', { path, status: null });
+      // Tell the server to drop the sticky 'done' so subsequent hook events
+      // can set a new status again.
+      App.api('DELETE', `/agent-status?path=${encodeURIComponent(path)}`).catch(() => {});
     }
   },
 
