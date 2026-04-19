@@ -16,9 +16,23 @@ fn port_is_free(port: u16) -> bool {
     TcpListener::bind(("127.0.0.1", port)).is_ok()
 }
 
-/// In `tauri dev`, server.js lives at repo_root/server.js (parent of src-tauri).
-/// In a bundled build, it's copied as a resource next to the binary.
+/// Resolve the directory containing server.js and its node_modules.
+///
+/// Precedence:
+///   1. $LOOM_REPO_DIR (if it has server.js AND node_modules)
+///   2. in `tauri dev`, the repo via CARGO_MANIFEST_DIR
+///   3. $HOME/Dev/loom (personal-install fallback — see PR rationale)
+///   4. bundled resource dir (only usable if node_modules is ever bundled)
 fn resolve_server_root(app: &tauri::AppHandle) -> Option<PathBuf> {
+    let has_runtime = |p: &PathBuf| p.join("server.js").exists() && p.join("node_modules").exists();
+
+    if let Ok(env_dir) = std::env::var("LOOM_REPO_DIR") {
+        let p = PathBuf::from(env_dir);
+        if has_runtime(&p) {
+            return Some(p);
+        }
+    }
+
     if cfg!(debug_assertions) {
         if let Some(manifest) = option_env!("CARGO_MANIFEST_DIR") {
             if let Ok(root) = PathBuf::from(manifest).join("..").canonicalize() {
@@ -28,6 +42,14 @@ fn resolve_server_root(app: &tauri::AppHandle) -> Option<PathBuf> {
             }
         }
     }
+
+    if let Some(home) = std::env::var_os("HOME") {
+        let p = PathBuf::from(home).join("Dev/loom");
+        if has_runtime(&p) {
+            return Some(p);
+        }
+    }
+
     app.path()
         .resource_dir()
         .ok()
