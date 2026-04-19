@@ -2,3 +2,7 @@ node_modules/
 tmp/
 start-loom.sh
 .claude/
+
+# Tauri
+src-tauri/target/
+src-tauri/gen/
