@@ -1734,7 +1734,12 @@ wss.on('connection', (ws) => {
             // e.g. "C:\\Program Files\\Git\\usr\\bin\\bash.exe"), use it as-is.
             // Otherwise try to resolve via PATH lookup (which on unix, where on win).
             let shellCmd = shell;
-            let shellArgs = [];
+            // Login shell on Unix so ~/.zprofile / ~/.bash_profile run. Without
+            // this, tools added to PATH in the login profile (Homebrew, pyenv,
+            // asdf, starship init) are missing when Loom itself was launched
+            // from Finder/Spotlight with launchd's minimal PATH — causing
+            // things like "command not found: starship" in new terminals.
+            let shellArgs = IS_WINDOWS ? [] : ['-l'];
             if (!path.isAbsolute(shellCmd) || !fs.existsSync(shellCmd)) {
               // Bare name or not found: attempt PATH resolution
               try {
