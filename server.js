@@ -1830,7 +1830,7 @@ function setupWatcher() {
   if (dirsToWatch.length === 0) return;
 
   watcher = chokidar.watch(dirsToWatch, {
-    depth: 2,
+    depth: 3,
     ignoreInitial: true,
     ignored: [
       /(^|[\/\\])\..(?!archive)/, // ignore dotfiles except .archive

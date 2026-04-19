@@ -153,6 +153,11 @@ const TerminalManager = {
 
     term.open(wrapperEl);
 
+    term.onSelectionChange(() => {
+      const sel = term.getSelection();
+      if (sel) navigator.clipboard.writeText(sel).catch(() => {});
+    });
+
     // Send create FIRST, then fit (fit triggers onResize synchronously)
     let created = false;
 
