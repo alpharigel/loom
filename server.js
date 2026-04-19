@@ -1382,7 +1382,9 @@ function mapHookToStatus(hookEventName, notificationType) {
     case 'UserPromptSubmit':
       return 'working';
     case 'Notification':
-      if (notificationType === 'idle_prompt') return 'done';
+      // All Notification variants indicate the agent is paused awaiting the
+      // user — map to 'waiting'. 'done' is reserved for Stop.
+      if (notificationType === 'idle_prompt') return 'waiting';
       if (notificationType === 'permission_prompt') return 'waiting';
       if (notificationType === 'elicitation_dialog') return 'waiting';
       return null;
@@ -1395,6 +1397,30 @@ function mapHookToStatus(hookEventName, notificationType) {
   }
 }
 
+function resolveProjectPath(cwd) {
+  const appCfg = getAppConfig();
+  const projDir = appCfg.projectDirectory;
+
+  // Worktrees live at WORKTREES_DIR/<section>/<project>/<branch>/...
+  if (cwd === WORKTREES_DIR || cwd.startsWith(WORKTREES_DIR + path.sep)) {
+    const rel = cwd.slice(WORKTREES_DIR.length + 1);
+    const parts = rel.split(path.sep);
+    if (parts.length >= 3) {
+      return path.join(WORKTREES_DIR, parts[0], parts[1], parts[2]);
+    }
+    return cwd;
+  }
+
+  // Managed projects live at projDir/<project>/...
+  if (projDir && (cwd === projDir || cwd.startsWith(projDir + path.sep))) {
+    const rel = cwd.slice(projDir.length + 1);
+    const topDir = rel.split(path.sep)[0];
+    if (topDir) return path.join(projDir, topDir);
+  }
+
+  return cwd;
+}
+
 app.post('/api/agent-status', (req, res) => {
   const { hook_event_name, cwd, notification_type } = req.body;
   if (!hook_event_name || !cwd) return res.status(400).json({ error: 'missing fields' });
@@ -1404,26 +1430,26 @@ app.post('/api/agent-status', (req, res) => {
   const status = mapHookToStatus(hook_event_name, notification_type);
   if (!status) return res.json({ ok: true, ignored: true });
 
-  // Resolve cwd to project root — hooks may fire from subdirectories
-  const appCfg = getAppConfig();
-  const projDir = appCfg.projectDirectory;
-  let projectPath = cwd;
+  const projectPath = resolveProjectPath(cwd);
 
-  // Check if cwd is under a worktree
-  const worktreeBase = path.join(projDir, '.worktrees');
-  if (cwd.startsWith(worktreeBase + '/')) {
-    // .worktrees/<project>/<branch>/... → .worktrees/<project>/<branch>
-    const rel = cwd.slice(worktreeBase.length + 1);
-    const parts = rel.split('/');
-    if (parts.length >= 2) {
-      projectPath = path.join(worktreeBase, parts[0], parts[1]);
+  // Terminal states (done, error) stick until the client explicitly clears them
+  // by clicking into the project. This guards against:
+  //   (a) async hook delivery: PostToolUse and Stop fire back-to-back when the
+  //       agent finishes; with async:true they can land out of order, causing
+  //       the green dot to flash off as a late 'working' overwrites 'done'.
+  //   (b) the product rule: green means "agent finished, you haven't looked
+  //       yet" — it should persist until acknowledged.
+  // 'error' is allowed to supersede 'done' so a late failure isn't hidden.
+  const prev = agentStatuses.get(projectPath);
+  if (prev) {
+    if (prev.status === 'done' && status !== 'error') {
+      return res.json({ ok: true, preserved: prev.status });
     }
-  } else if (cwd.startsWith(projDir + '/')) {
-    // Dev/<project>/... → Dev/<project>
-    const rel = cwd.slice(projDir.length + 1);
-    const topDir = rel.split('/')[0];
-    projectPath = path.join(projDir, topDir);
+    if (prev.status === 'error') {
+      return res.json({ ok: true, preserved: prev.status });
+    }
   }
+
   agentStatuses.set(projectPath, { status, timestamp: Date.now() });
 
   // Broadcast to all WS clients
@@ -1441,6 +1467,20 @@ app.get('/api/agent-status', (req, res) => {
     result[path] = info;
   }
   res.json(result);
+});
+
+app.delete('/api/agent-status', (req, res) => {
+  const p = req.query.path;
+  if (!p) return res.status(400).json({ error: 'missing path' });
+  const prev = agentStatuses.get(p);
+  if (prev && (prev.status === 'done' || prev.status === 'error')) {
+    agentStatuses.delete(p);
+    const msg = JSON.stringify({ type: 'agent:status', path: p, status: null });
+    wss.clients.forEach(client => {
+      if (client.readyState === 1) client.send(msg);
+    });
+  }
+  res.json({ ok: true });
 });
 
 // ---------------------------------------------------------------------------
