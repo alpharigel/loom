@@ -51,6 +51,18 @@ app.use('/vendor/xterm-addon-web-links', express.static(path.join(__dirname, 'no
 // ---------------------------------------------------------------------------
 
 const IS_WINDOWS = process.platform === 'win32';
+const IS_MACOS = process.platform === 'darwin';
+
+// When launched from Finder/Spotlight (Loom.app), the server inherits
+// launchd's minimal PATH and misses Homebrew. Prepend the common Homebrew
+// bin dirs so tmux, gh, claude, starship etc. are findable both for our
+// own startup probes and for child processes we spawn later.
+if (IS_MACOS) {
+  const extraPaths = ['/opt/homebrew/bin', '/opt/homebrew/sbin', '/usr/local/bin', '/usr/local/sbin'];
+  const current = (process.env.PATH || '').split(':');
+  const missing = extraPaths.filter(p => !current.includes(p) && fs.existsSync(p));
+  if (missing.length) process.env.PATH = [...missing, ...current].filter(Boolean).join(':');
+}
 
 // Detect tmux once at startup; sticky terminal sessions depend on it.
 const HAS_TMUX = (() => {
@@ -161,15 +173,23 @@ function saveAppConfig(cfg) {
 }
 
 function getProjectConfig() {
-  const defaults = { projectOrder: [], commands: {} };
+  const defaults = { projectOrder: [], sectionOrders: {}, commands: {} };
   // Primary: ~/.loom/project-config.json
+  let cfg;
   if (fs.existsSync(PROJECT_CONFIG_FILE)) {
-    return readJSON(PROJECT_CONFIG_FILE, defaults);
+    cfg = readJSON(PROJECT_CONFIG_FILE, defaults);
+  } else {
+    // Fallback: old location {projectDir}/.loom/config.json (pre-migration compat)
+    const appCfg = getAppConfig();
+    const oldCfgFile = path.join(appCfg.projectDirectory, '.loom', 'config.json');
+    cfg = readJSON(oldCfgFile, defaults);
   }
-  // Fallback: old location {projectDir}/.loom/config.json (pre-migration compat)
-  const appCfg = getAppConfig();
-  const oldCfgFile = path.join(appCfg.projectDirectory, '.loom', 'config.json');
-  return readJSON(oldCfgFile, defaults);
+  if (!cfg.sectionOrders) cfg.sectionOrders = {};
+  // Migrate legacy projectOrder → sectionOrders.projects
+  if (Array.isArray(cfg.projectOrder) && cfg.projectOrder.length && !cfg.sectionOrders.projects) {
+    cfg.sectionOrders.projects = cfg.projectOrder.slice();
+  }
+  return cfg;
 }
 
 function saveProjectConfig(cfg) {
@@ -668,16 +688,22 @@ app.get('/api/projects', (req, res) => {
   const projects = scanSection(projDir, 'projects', projCfg);
   const skills = discoverSkills();
 
-  // Sort projects by configured order, then newest-first (from scanSection)
-  const order = projCfg.projectOrder || [];
-  projects.sort((a, b) => {
-    const ai = order.indexOf(a.name);
-    const bi = order.indexOf(b.name);
-    if (ai !== -1 && bi !== -1) return ai - bi;
-    if (ai !== -1) return -1;
-    if (bi !== -1) return 1;
-    return 0;
-  });
+  // Sort each reorderable section by its configured order; names not in the
+  // order list keep the newest-first ordering from scanSection.
+  const sortBySectionOrder = (items, section) => {
+    const order = (projCfg.sectionOrders && projCfg.sectionOrders[section]) || [];
+    items.sort((a, b) => {
+      const ai = order.indexOf(a.name);
+      const bi = order.indexOf(b.name);
+      if (ai !== -1 && bi !== -1) return ai - bi;
+      if (ai !== -1) return -1;
+      if (bi !== -1) return 1;
+      return 0;
+    });
+  };
+  sortBySectionOrder(projects, 'projects');
+  sortBySectionOrder(scratch, 'scratch');
+  sortBySectionOrder(agents, 'agents');
 
   // Archived projects
   const archived = [];
@@ -749,7 +775,7 @@ app.post('/api/projects', (req, res) => {
   };
   const baseDir = sectionDirs[section] || sectionDirs.projects;
 
-  createSectionItem(baseDir, name, res);
+  createSectionItem(baseDir, name, res, section || 'projects');
 });
 
 // ---------------------------------------------------------------------------
@@ -844,6 +870,13 @@ app.post('/api/github/clone', async (req, res) => {
       encoding: 'utf-8',
       timeout: 120000,
     });
+    // Prepend to projects order so the freshly cloned repo shows up at top.
+    const cfg = getProjectConfig();
+    if (!cfg.sectionOrders) cfg.sectionOrders = {};
+    const current = (cfg.sectionOrders.projects || []).filter(n => n !== repoName);
+    cfg.sectionOrders.projects = [repoName, ...current];
+    cfg.projectOrder = cfg.sectionOrders.projects;
+    saveProjectConfig(cfg);
     res.json({ name: repoName, path: targetPath });
   } catch (err) {
     res.status(500).json({ error: err.stderr || err.message });
@@ -894,7 +927,7 @@ app.post('/api/projects/:name/unarchive', (req, res) => {
 // API: Scratch & Agents
 // ---------------------------------------------------------------------------
 
-function createSectionItem(baseDir, name, res) {
+function createSectionItem(baseDir, name, res, section) {
   if (!name) return res.status(400).json({ error: 'Name required' });
   const sanitized = sanitize(name);
   if (!sanitized) return res.status(400).json({ error: 'Invalid name' });
@@ -909,17 +942,28 @@ function createSectionItem(baseDir, name, res) {
   fs.writeFileSync(path.join(fullPath, 'README.md'), `# ${name}\n`);
   execSync('git add -A && git commit -m "Initial commit"', { cwd: fullPath, stdio: 'pipe' });
 
+  // Prepend to the section's saved order so the new item appears at the top
+  // of the sidebar instead of somewhere arbitrary.
+  if (section && ['projects', 'scratch', 'agents'].includes(section)) {
+    const cfg = getProjectConfig();
+    if (!cfg.sectionOrders) cfg.sectionOrders = {};
+    const current = (cfg.sectionOrders[section] || []).filter(n => n !== sanitized);
+    cfg.sectionOrders[section] = [sanitized, ...current];
+    if (section === 'projects') cfg.projectOrder = cfg.sectionOrders.projects;
+    saveProjectConfig(cfg);
+  }
+
   res.json({ name: sanitized, path: fullPath });
 }
 
 app.post('/api/scratch', (req, res) => {
   const profileName = req.profileName;
-  createSectionItem(profileName ? getProfileScratchDir(profileName) : SCRATCH_DIR, req.body.name, res);
+  createSectionItem(profileName ? getProfileScratchDir(profileName) : SCRATCH_DIR, req.body.name, res, 'scratch');
 });
 
 app.post('/api/agents', (req, res) => {
   const profileName = req.profileName;
-  createSectionItem(profileName ? getProfileAgentsDir(profileName) : AGENTS_DIR, req.body.name, res);
+  createSectionItem(profileName ? getProfileAgentsDir(profileName) : AGENTS_DIR, req.body.name, res, 'agents');
 });
 
 app.delete('/api/sections/:section/:name', (req, res) => {
@@ -982,9 +1026,23 @@ app.post('/api/projects/:name/worktrees', (req, res) => {
 app.delete('/api/projects/:name/worktrees/:branch', (req, res) => {
   const sectionType = req.query.section || 'projects';
   const itemDir = getItemDir(sectionType, req.params.name, req.profileName);
-  const wtPath = path.join(getWorktreeDir(sectionType, req.params.name), req.params.branch);
+  const managedPath = path.join(getWorktreeDir(sectionType, req.params.name), req.params.branch);
 
-  if (!fs.existsSync(wtPath)) return res.status(404).json({ error: 'Worktree not found' });
+  // Resolve the actual worktree path: prefer the loom-managed location, else
+  // look up by branch name in `git worktree list` so we also handle worktrees
+  // registered outside ~/.loom/worktrees.
+  let wtPath = null;
+  if (fs.existsSync(managedPath)) {
+    wtPath = managedPath;
+  } else {
+    const gitWorktrees = getWorktrees(itemDir);
+    const match = gitWorktrees.find(w =>
+      w.branch === req.params.branch || path.basename(w.path) === req.params.branch
+    );
+    if (match) wtPath = match.path;
+  }
+
+  if (!wtPath) return res.status(404).json({ error: 'Worktree not found' });
 
   try {
     execSync(`git worktree remove "${wtPath}" --force`, { cwd: itemDir, stdio: 'pipe' });
@@ -1002,11 +1060,14 @@ app.delete('/api/projects/:name/worktrees/:branch', (req, res) => {
 // ---------------------------------------------------------------------------
 
 app.put('/api/projects/order', (req, res) => {
-  const { order } = req.body;
+  const { order, section } = req.body;
   if (!Array.isArray(order)) return res.status(400).json({ error: 'Order must be an array' });
 
   const cfg = getProjectConfig();
-  cfg.projectOrder = order;
+  if (!cfg.sectionOrders) cfg.sectionOrders = {};
+  const sec = ['projects', 'scratch', 'agents'].includes(section) ? section : 'projects';
+  cfg.sectionOrders[sec] = order;
+  if (sec === 'projects') cfg.projectOrder = order; // legacy mirror
   saveProjectConfig(cfg);
   res.json({ success: true });
 });
@@ -1709,8 +1770,13 @@ wss.on('connection', (ws) => {
 
             log(`terminal:sticky id=${id} session=${sessionName} exists=${alreadyExists}`);
 
-            // tmux new-session -A: attach if exists, create if not
+            // tmux new-session -A: attach if exists, create if not.
+            // -u forces UTF-8 mode regardless of locale — required when
+            // Loom.app is launched from Finder/Spotlight, since launchd
+            // gives us no LANG/LC_* and tmux otherwise falls back to ASCII
+            // (rendering powerline/nerd glyphs as `_`).
             ptyProcess = pty.spawn('tmux', [
+              '-u',
               '-f', LOOM_TMUX_CONF,
               'new-session', '-A', '-s', sessionName, '-c', effectiveCwd,
             ], {
@@ -1718,7 +1784,14 @@ wss.on('connection', (ws) => {
               cols: msg.cols || 80,
               rows: msg.rows || 24,
               cwd: effectiveCwd,
-              env: { ...process.env, TERM: 'xterm-256color', HOME: os.homedir() },
+              env: {
+                ...process.env,
+                TERM: 'xterm-256color',
+                HOME: os.homedir(),
+                LANG: process.env.LANG || 'en_US.UTF-8',
+                LC_ALL: process.env.LC_ALL || 'en_US.UTF-8',
+                LC_CTYPE: process.env.LC_CTYPE || 'en_US.UTF-8',
+              },
             });
 
             // If this is a brand-new session and the caller supplied an

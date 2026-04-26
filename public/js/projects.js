@@ -265,7 +265,7 @@ const Projects = {
     const isManaged = ['projects', 'scratch', 'agents', 'skills'].includes(type);
     const supportsWorktrees = type !== 'scratch' && type !== 'skills';
 
-    if (type === 'projects') {
+    if (type === 'projects' || type === 'scratch' || type === 'agents') {
       el.draggable = true;
     }
 

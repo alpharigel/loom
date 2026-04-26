@@ -15,6 +15,23 @@ const TerminalManager = {
   SESSION_TTL: 30 * 60 * 1000, // 30 minutes
 
   init() {
+    // Ensure the Nerd Font is fully loaded before any terminal renders, so
+    // the canvas/WebGL glyph cache picks it up on first paint. Without this,
+    // Powerline / Nerd icons render as missing-glyph boxes (and stay that
+    // way until the renderer is forced to remeasure).
+    if (document.fonts && document.fonts.load) {
+      document.fonts.load("13px 'Symbols Nerd Font Mono'").then(() => {
+        // Force any already-created terminals to reflow with the loaded font.
+        for (const entry of this.terminals.values()) {
+          try {
+            entry.term.options.fontFamily = entry.term.options.fontFamily;
+            entry.fitAddon.fit();
+            entry.term.refresh(0, entry.term.rows - 1);
+          } catch { /* ignore */ }
+        }
+      }).catch(() => {});
+    }
+
     App.on('project:selected', (project) => this.onProjectSelected(project));
 
     // Setup right-pane tab switching
@@ -113,7 +130,7 @@ const TerminalManager = {
     container.appendChild(wrapperEl);
 
     const term = new Terminal({
-      fontFamily: "'JetBrains Mono', 'SF Mono', 'Fira Code', monospace",
+      fontFamily: "'JetBrains Mono', 'Symbols Nerd Font Mono', 'SF Mono', 'Fira Code', monospace",
       fontSize: 13,
       lineHeight: 1.4,
       cursorBlink: true,
