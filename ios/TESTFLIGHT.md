@@ -1,41 +1,55 @@
-# Shipping Loom to TestFlight via Xcode Cloud
+# Shipping the iOS app to TestFlight via Xcode Cloud
 
-Same pattern as Weave and Zeno. Once configured, every push to a tracked branch produces a TestFlight build automatically — no local archive step needed.
+If you fork Loom and want to distribute the iOS app to TestFlight, this is
+the path of least resistance. No local archive step needed once Xcode Cloud
+is wired up — every push to a tracked branch produces a build automatically.
 
-## What's already wired up
+## What's already in the repo
 
-- `project.yml` uses team `F5YPB69R7A` and bundle id `com.jaydermody.loom`.
-- `ExportOptions.plist` set to App Store Connect upload.
-- `ci_scripts/ci_post_clone.sh` runs `xcodegen generate` so Xcode Cloud has a project to build.
+- `project.yml` — XcodeGen config; bundle id and team id live here.
+- `ExportOptions.plist` — set to App Store Connect upload.
+- `ci_scripts/ci_post_clone.sh` — runs `xcodegen generate` so Xcode Cloud
+  has a project to build before its compile step.
+
+You will need to change two values in `project.yml` to match your own
+Apple Developer account:
+
+- `options.bundleIdPrefix` — your reverse-DNS prefix (e.g. `com.example`)
+- `settings.base.DEVELOPMENT_TEAM` — your 10-character Apple team ID
+  (find it at <https://developer.apple.com/account> → Membership)
+
+`ExportOptions.plist` and the `PRODUCT_BUNDLE_IDENTIFIER` references in
+`Loom.xcodeproj/project.pbxproj` should be updated to match.
 
 ## One-time setup in App Store Connect (~5 min)
 
-1. **Register the App** — https://appstoreconnect.apple.com/apps → **+** → New App
+1. **Register the App** — <https://appstoreconnect.apple.com/apps> → **+** → New App
    - Platform: iOS
-   - Name: Loom
-   - Bundle ID: `com.jaydermody.loom` (it'll show in the dropdown after the first xcodegen registers it; if not, register at https://developer.apple.com/account/resources/identifiers/list first)
-   - SKU: `loom-ios`
+   - Name: whatever you like
+   - Bundle ID: must match `PRODUCT_BUNDLE_IDENTIFIER` in `project.yml`.
+     (Register the identifier first at
+     <https://developer.apple.com/account/resources/identifiers/list> if it
+     doesn't appear in the dropdown.)
 
-2. **Create an Xcode Cloud workflow** — In App Store Connect → Loom → **Xcode Cloud** → Get Started
-   - Connect the GitHub repo `alpharigel/loom`.
-   - **Source branch**: pick `main` (or `ios-app` for a pre-merge preview).
-   - **Start condition**: "On every push" or "On a schedule" — your pick.
+2. **Create an Xcode Cloud workflow** — In App Store Connect → your app →
+   **Xcode Cloud** → Get Started
+   - Connect your GitHub fork.
+   - **Source branch**: `main` (or any branch you want to track).
+   - **Start condition**: on push, on a schedule, or manual — your call.
    - **Action**: Archive → Internal Distribution: TestFlight.
    - **Environment**: Xcode 16, macOS 14+.
    - Save & run.
 
-3. **Add testers** — App Store Connect → Loom → TestFlight
-   - **Internal**: add yourself by Apple ID. Build is available immediately after Xcode Cloud finishes.
-   - **External (Lauren)**: New Group → add Lauren's Apple ID email. First external build needs ~24h Beta App Review; subsequent builds in the same major version skip review.
+3. **Add testers** — App Store Connect → your app → TestFlight
+   - **Internal testers** (Apple IDs in your team) get builds immediately.
+   - **External testers** require ~24h Beta App Review for the first build
+     in a major version; subsequent builds skip review.
 
 ## Versioning
 
-`MARKETING_VERSION` (0.1.0) and `CURRENT_PROJECT_VERSION` (1) are in `project.yml`. Bump the latter on each release — Xcode Cloud requires monotonically increasing build numbers.
+`MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` live in `project.yml`.
+Bump `CURRENT_PROJECT_VERSION` on each release — Xcode Cloud requires
+monotonically increasing build numbers.
 
-You can also let Xcode Cloud auto-increment via env vars in a custom build script, but for now manual bump matches Weave/Zeno.
-
-## What I need from you
-
-Just confirm:
-1. Xcode Cloud workflow created in App Store Connect, pointing at this repo + branch.
-2. Lauren's Apple ID email (for the external tester invite — has to be done in the App Store Connect UI; the API doesn't expose tester management).
+You can also auto-increment via env vars in a custom build script if you
+prefer not to bump manually.
