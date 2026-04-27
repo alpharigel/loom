@@ -3,6 +3,11 @@ tmp/
 start-loom.sh
 .claude/
 
+# Local secrets
+.env
+.env.*
+!.env.example
+
 # Tauri
 src-tauri/target/
 src-tauri/gen/
