@@ -5,10 +5,22 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Loom</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="preload" href="fonts/SymbolsNerdFontMono-Regular.ttf" as="font" type="font/ttf" crossorigin>
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <!-- Symbols Nerd Font Mono — fallback for Powerline/Nerd glyphs used by
+       starship, claude code, etc. so they don't render as missing-glyph boxes.
+       Served locally so it works offline and inside Tauri WKWebView. -->
+  <style>
+    @font-face {
+      font-family: 'Symbols Nerd Font Mono';
+      src: url('fonts/SymbolsNerdFontMono-Regular.ttf') format('truetype');
+      font-display: block;
+    }
+  </style>
 
   <!-- xterm.js (served locally from node_modules) -->
   <link rel="stylesheet" href="vendor/xterm/css/xterm.css">
@@ -227,7 +239,7 @@
       <div class="modal-body">
         <!-- Blank project tab -->
         <div id="tab-blank" class="tab-content">
-          <label class="field-label">Project Name</label>
+          <label class="field-label" id="new-project-name-label">Project Name</label>
           <input type="text" id="input-project-name" class="text-input" placeholder="my-awesome-project" autofocus>
           <p class="field-hint">Will be sanitized to a valid directory name.</p>
           <button id="btn-create-project" class="btn btn-primary" style="margin-top: 16px; width: 100%;">Create Project</button>

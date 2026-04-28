@@ -51,6 +51,18 @@ app.use('/vendor/xterm-addon-web-links', express.static(path.join(__dirname, 'no
 // ---------------------------------------------------------------------------
 
 const IS_WINDOWS = process.platform === 'win32';
+const IS_MACOS = process.platform === 'darwin';
+
+// When launched from Finder/Spotlight (Loom.app), the server inherits
+// launchd's minimal PATH and misses Homebrew. Prepend the common Homebrew
+// bin dirs so tmux, gh, claude, starship etc. are findable both for our
+// own startup probes and for child processes we spawn later.
+if (IS_MACOS) {
+  const extraPaths = ['/opt/homebrew/bin', '/opt/homebrew/sbin', '/usr/local/bin', '/usr/local/sbin'];
+  const current = (process.env.PATH || '').split(':');
+  const missing = extraPaths.filter(p => !current.includes(p) && fs.existsSync(p));
+  if (missing.length) process.env.PATH = [...missing, ...current].filter(Boolean).join(':');
+}
 
 // Detect tmux once at startup; sticky terminal sessions depend on it.
 const HAS_TMUX = (() => {
@@ -161,15 +173,23 @@ function saveAppConfig(cfg) {
 }
 
 function getProjectConfig() {
-  const defaults = { projectOrder: [], commands: {} };
+  const defaults = { projectOrder: [], sectionOrders: {}, commands: {} };
   // Primary: ~/.loom/project-config.json
+  let cfg;
   if (fs.existsSync(PROJECT_CONFIG_FILE)) {
-    return readJSON(PROJECT_CONFIG_FILE, defaults);
+    cfg = readJSON(PROJECT_CONFIG_FILE, defaults);
+  } else {
+    // Fallback: old location {projectDir}/.loom/config.json (pre-migration compat)
+    const appCfg = getAppConfig();
+    const oldCfgFile = path.join(appCfg.projectDirectory, '.loom', 'config.json');
+    cfg = readJSON(oldCfgFile, defaults);
   }
-  // Fallback: old location {projectDir}/.loom/config.json (pre-migration compat)
-  const appCfg = getAppConfig();
-  const oldCfgFile = path.join(appCfg.projectDirectory, '.loom', 'config.json');
-  return readJSON(oldCfgFile, defaults);
+  if (!cfg.sectionOrders) cfg.sectionOrders = {};
+  // Migrate legacy projectOrder → sectionOrders.projects
+  if (Array.isArray(cfg.projectOrder) && cfg.projectOrder.length && !cfg.sectionOrders.projects) {
+    cfg.sectionOrders.projects = cfg.projectOrder.slice();
+  }
+  return cfg;
 }
 
 function saveProjectConfig(cfg) {
@@ -555,10 +575,17 @@ function sanitize(name) {
 // Git helpers
 // ---------------------------------------------------------------------------
 
+// Direct filesystem check instead of shelling out to git. This avoids
+// spawning a subprocess per directory on every sidebar refresh, which
+// exhausts file descriptors on long-running servers (macOS default soft
+// limit is 256) and silently breaks project detection.
+// Handles both plain git repos (.git is a dir) and git worktrees
+// (.git is a file pointing at the real gitdir).
 function isGitRepo(dir) {
   try {
-    execSync('git rev-parse --is-inside-work-tree', { cwd: dir, stdio: 'pipe' });
-    return true;
+    const gitPath = path.join(dir, '.git');
+    const st = fs.lstatSync(gitPath);
+    return st.isDirectory() || st.isFile();
   } catch {
     return false;
   }
@@ -661,16 +688,22 @@ app.get('/api/projects', (req, res) => {
   const projects = scanSection(projDir, 'projects', projCfg);
   const skills = discoverSkills();
 
-  // Sort projects by configured order, then newest-first (from scanSection)
-  const order = projCfg.projectOrder || [];
-  projects.sort((a, b) => {
-    const ai = order.indexOf(a.name);
-    const bi = order.indexOf(b.name);
-    if (ai !== -1 && bi !== -1) return ai - bi;
-    if (ai !== -1) return -1;
-    if (bi !== -1) return 1;
-    return 0;
-  });
+  // Sort each reorderable section by its configured order; names not in the
+  // order list keep the newest-first ordering from scanSection.
+  const sortBySectionOrder = (items, section) => {
+    const order = (projCfg.sectionOrders && projCfg.sectionOrders[section]) || [];
+    items.sort((a, b) => {
+      const ai = order.indexOf(a.name);
+      const bi = order.indexOf(b.name);
+      if (ai !== -1 && bi !== -1) return ai - bi;
+      if (ai !== -1) return -1;
+      if (bi !== -1) return 1;
+      return 0;
+    });
+  };
+  sortBySectionOrder(projects, 'projects');
+  sortBySectionOrder(scratch, 'scratch');
+  sortBySectionOrder(agents, 'agents');
 
   // Archived projects
   const archived = [];
@@ -742,7 +775,7 @@ app.post('/api/projects', (req, res) => {
   };
   const baseDir = sectionDirs[section] || sectionDirs.projects;
 
-  createSectionItem(baseDir, name, res);
+  createSectionItem(baseDir, name, res, section || 'projects');
 });
 
 // ---------------------------------------------------------------------------
@@ -837,6 +870,13 @@ app.post('/api/github/clone', async (req, res) => {
       encoding: 'utf-8',
       timeout: 120000,
     });
+    // Prepend to projects order so the freshly cloned repo shows up at top.
+    const cfg = getProjectConfig();
+    if (!cfg.sectionOrders) cfg.sectionOrders = {};
+    const current = (cfg.sectionOrders.projects || []).filter(n => n !== repoName);
+    cfg.sectionOrders.projects = [repoName, ...current];
+    cfg.projectOrder = cfg.sectionOrders.projects;
+    saveProjectConfig(cfg);
     res.json({ name: repoName, path: targetPath });
   } catch (err) {
     res.status(500).json({ error: err.stderr || err.message });
@@ -887,7 +927,7 @@ app.post('/api/projects/:name/unarchive', (req, res) => {
 // API: Scratch & Agents
 // ---------------------------------------------------------------------------
 
-function createSectionItem(baseDir, name, res) {
+function createSectionItem(baseDir, name, res, section) {
   if (!name) return res.status(400).json({ error: 'Name required' });
   const sanitized = sanitize(name);
   if (!sanitized) return res.status(400).json({ error: 'Invalid name' });
@@ -902,17 +942,28 @@ function createSectionItem(baseDir, name, res) {
   fs.writeFileSync(path.join(fullPath, 'README.md'), `# ${name}\n`);
   execSync('git add -A && git commit -m "Initial commit"', { cwd: fullPath, stdio: 'pipe' });
 
+  // Prepend to the section's saved order so the new item appears at the top
+  // of the sidebar instead of somewhere arbitrary.
+  if (section && ['projects', 'scratch', 'agents'].includes(section)) {
+    const cfg = getProjectConfig();
+    if (!cfg.sectionOrders) cfg.sectionOrders = {};
+    const current = (cfg.sectionOrders[section] || []).filter(n => n !== sanitized);
+    cfg.sectionOrders[section] = [sanitized, ...current];
+    if (section === 'projects') cfg.projectOrder = cfg.sectionOrders.projects;
+    saveProjectConfig(cfg);
+  }
+
   res.json({ name: sanitized, path: fullPath });
 }
 
 app.post('/api/scratch', (req, res) => {
   const profileName = req.profileName;
-  createSectionItem(profileName ? getProfileScratchDir(profileName) : SCRATCH_DIR, req.body.name, res);
+  createSectionItem(profileName ? getProfileScratchDir(profileName) : SCRATCH_DIR, req.body.name, res, 'scratch');
 });
 
 app.post('/api/agents', (req, res) => {
   const profileName = req.profileName;
-  createSectionItem(profileName ? getProfileAgentsDir(profileName) : AGENTS_DIR, req.body.name, res);
+  createSectionItem(profileName ? getProfileAgentsDir(profileName) : AGENTS_DIR, req.body.name, res, 'agents');
 });
 
 app.delete('/api/sections/:section/:name', (req, res) => {
@@ -975,9 +1026,23 @@ app.post('/api/projects/:name/worktrees', (req, res) => {
 app.delete('/api/projects/:name/worktrees/:branch', (req, res) => {
   const sectionType = req.query.section || 'projects';
   const itemDir = getItemDir(sectionType, req.params.name, req.profileName);
-  const wtPath = path.join(getWorktreeDir(sectionType, req.params.name), req.params.branch);
+  const managedPath = path.join(getWorktreeDir(sectionType, req.params.name), req.params.branch);
 
-  if (!fs.existsSync(wtPath)) return res.status(404).json({ error: 'Worktree not found' });
+  // Resolve the actual worktree path: prefer the loom-managed location, else
+  // look up by branch name in `git worktree list` so we also handle worktrees
+  // registered outside ~/.loom/worktrees.
+  let wtPath = null;
+  if (fs.existsSync(managedPath)) {
+    wtPath = managedPath;
+  } else {
+    const gitWorktrees = getWorktrees(itemDir);
+    const match = gitWorktrees.find(w =>
+      w.branch === req.params.branch || path.basename(w.path) === req.params.branch
+    );
+    if (match) wtPath = match.path;
+  }
+
+  if (!wtPath) return res.status(404).json({ error: 'Worktree not found' });
 
   try {
     execSync(`git worktree remove "${wtPath}" --force`, { cwd: itemDir, stdio: 'pipe' });
@@ -995,11 +1060,14 @@ app.delete('/api/projects/:name/worktrees/:branch', (req, res) => {
 // ---------------------------------------------------------------------------
 
 app.put('/api/projects/order', (req, res) => {
-  const { order } = req.body;
+  const { order, section } = req.body;
   if (!Array.isArray(order)) return res.status(400).json({ error: 'Order must be an array' });
 
   const cfg = getProjectConfig();
-  cfg.projectOrder = order;
+  if (!cfg.sectionOrders) cfg.sectionOrders = {};
+  const sec = ['projects', 'scratch', 'agents'].includes(section) ? section : 'projects';
+  cfg.sectionOrders[sec] = order;
+  if (sec === 'projects') cfg.projectOrder = order; // legacy mirror
   saveProjectConfig(cfg);
   res.json({ success: true });
 });
@@ -1382,7 +1450,9 @@ function mapHookToStatus(hookEventName, notificationType) {
     case 'UserPromptSubmit':
       return 'working';
     case 'Notification':
-      if (notificationType === 'idle_prompt') return 'done';
+      // All Notification variants indicate the agent is paused awaiting the
+      // user — map to 'waiting'. 'done' is reserved for Stop.
+      if (notificationType === 'idle_prompt') return 'waiting';
       if (notificationType === 'permission_prompt') return 'waiting';
       if (notificationType === 'elicitation_dialog') return 'waiting';
       return null;
@@ -1395,6 +1465,30 @@ function mapHookToStatus(hookEventName, notificationType) {
   }
 }
 
+function resolveProjectPath(cwd) {
+  const appCfg = getAppConfig();
+  const projDir = appCfg.projectDirectory;
+
+  // Worktrees live at WORKTREES_DIR/<section>/<project>/<branch>/...
+  if (cwd === WORKTREES_DIR || cwd.startsWith(WORKTREES_DIR + path.sep)) {
+    const rel = cwd.slice(WORKTREES_DIR.length + 1);
+    const parts = rel.split(path.sep);
+    if (parts.length >= 3) {
+      return path.join(WORKTREES_DIR, parts[0], parts[1], parts[2]);
+    }
+    return cwd;
+  }
+
+  // Managed projects live at projDir/<project>/...
+  if (projDir && (cwd === projDir || cwd.startsWith(projDir + path.sep))) {
+    const rel = cwd.slice(projDir.length + 1);
+    const topDir = rel.split(path.sep)[0];
+    if (topDir) return path.join(projDir, topDir);
+  }
+
+  return cwd;
+}
+
 app.post('/api/agent-status', (req, res) => {
   const { hook_event_name, cwd, notification_type } = req.body;
   if (!hook_event_name || !cwd) return res.status(400).json({ error: 'missing fields' });
@@ -1404,26 +1498,26 @@ app.post('/api/agent-status', (req, res) => {
   const status = mapHookToStatus(hook_event_name, notification_type);
   if (!status) return res.json({ ok: true, ignored: true });
 
-  // Resolve cwd to project root — hooks may fire from subdirectories
-  const appCfg = getAppConfig();
-  const projDir = appCfg.projectDirectory;
-  let projectPath = cwd;
+  const projectPath = resolveProjectPath(cwd);
 
-  // Check if cwd is under a worktree
-  const worktreeBase = path.join(projDir, '.worktrees');
-  if (cwd.startsWith(worktreeBase + '/')) {
-    // .worktrees/<project>/<branch>/... → .worktrees/<project>/<branch>
-    const rel = cwd.slice(worktreeBase.length + 1);
-    const parts = rel.split('/');
-    if (parts.length >= 2) {
-      projectPath = path.join(worktreeBase, parts[0], parts[1]);
+  // Terminal states (done, error) stick until the client explicitly clears them
+  // by clicking into the project. This guards against:
+  //   (a) async hook delivery: PostToolUse and Stop fire back-to-back when the
+  //       agent finishes; with async:true they can land out of order, causing
+  //       the green dot to flash off as a late 'working' overwrites 'done'.
+  //   (b) the product rule: green means "agent finished, you haven't looked
+  //       yet" — it should persist until acknowledged.
+  // 'error' is allowed to supersede 'done' so a late failure isn't hidden.
+  const prev = agentStatuses.get(projectPath);
+  if (prev) {
+    if (prev.status === 'done' && status !== 'error') {
+      return res.json({ ok: true, preserved: prev.status });
     }
-  } else if (cwd.startsWith(projDir + '/')) {
-    // Dev/<project>/... → Dev/<project>
-    const rel = cwd.slice(projDir.length + 1);
-    const topDir = rel.split('/')[0];
-    projectPath = path.join(projDir, topDir);
+    if (prev.status === 'error') {
+      return res.json({ ok: true, preserved: prev.status });
+    }
   }
+
   agentStatuses.set(projectPath, { status, timestamp: Date.now() });
 
   // Broadcast to all WS clients
@@ -1441,6 +1535,20 @@ app.get('/api/agent-status', (req, res) => {
     result[path] = info;
   }
   res.json(result);
+});
+
+app.delete('/api/agent-status', (req, res) => {
+  const p = req.query.path;
+  if (!p) return res.status(400).json({ error: 'missing path' });
+  const prev = agentStatuses.get(p);
+  if (prev && (prev.status === 'done' || prev.status === 'error')) {
+    agentStatuses.delete(p);
+    const msg = JSON.stringify({ type: 'agent:status', path: p, status: null });
+    wss.clients.forEach(client => {
+      if (client.readyState === 1) client.send(msg);
+    });
+  }
+  res.json({ ok: true });
 });
 
 // ---------------------------------------------------------------------------
@@ -1662,8 +1770,13 @@ wss.on('connection', (ws) => {
 
             log(`terminal:sticky id=${id} session=${sessionName} exists=${alreadyExists}`);
 
-            // tmux new-session -A: attach if exists, create if not
+            // tmux new-session -A: attach if exists, create if not.
+            // -u forces UTF-8 mode regardless of locale — required when
+            // Loom.app is launched from Finder/Spotlight, since launchd
+            // gives us no LANG/LC_* and tmux otherwise falls back to ASCII
+            // (rendering powerline/nerd glyphs as `_`).
             ptyProcess = pty.spawn('tmux', [
+              '-u',
               '-f', LOOM_TMUX_CONF,
               'new-session', '-A', '-s', sessionName, '-c', effectiveCwd,
             ], {
@@ -1671,7 +1784,14 @@ wss.on('connection', (ws) => {
               cols: msg.cols || 80,
               rows: msg.rows || 24,
               cwd: effectiveCwd,
-              env: { ...process.env, TERM: 'xterm-256color', HOME: os.homedir() },
+              env: {
+                ...process.env,
+                TERM: 'xterm-256color',
+                HOME: os.homedir(),
+                LANG: process.env.LANG || 'en_US.UTF-8',
+                LC_ALL: process.env.LC_ALL || 'en_US.UTF-8',
+                LC_CTYPE: process.env.LC_CTYPE || 'en_US.UTF-8',
+              },
             });
 
             // If this is a brand-new session and the caller supplied an
@@ -1687,7 +1807,12 @@ wss.on('connection', (ws) => {
             // e.g. "C:\\Program Files\\Git\\usr\\bin\\bash.exe"), use it as-is.
             // Otherwise try to resolve via PATH lookup (which on unix, where on win).
             let shellCmd = shell;
-            let shellArgs = [];
+            // Login shell on Unix so ~/.zprofile / ~/.bash_profile run. Without
+            // this, tools added to PATH in the login profile (Homebrew, pyenv,
+            // asdf, starship init) are missing when Loom itself was launched
+            // from Finder/Spotlight with launchd's minimal PATH — causing
+            // things like "command not found: starship" in new terminals.
+            let shellArgs = IS_WINDOWS ? [] : ['-l'];
             if (!path.isAbsolute(shellCmd) || !fs.existsSync(shellCmd)) {
               // Bare name or not found: attempt PATH resolution
               try {
@@ -1785,18 +1910,48 @@ function setupWatcher() {
   const appCfg = getAppConfig();
   const projDir = appCfg.projectDirectory;
 
-  const dirsToWatch = [projDir, PROFILES_DIR, SKILLS_DIR, WORKTREES_DIR]
-    .filter(d => fs.existsSync(d));
-  if (dirsToWatch.length === 0) return;
+  // Shallow depth for the projects root — we only need to notice new
+  // top-level projects appearing/disappearing. Descending into each
+  // project's subtree pulls in things like data/, dist/, build/ caches
+  // that balloon to tens of thousands of files and exhaust the process's
+  // file-descriptor budget (observed: 47k open REG files from a single
+  // research-cache directory, breaking every subsequent child_process
+  // spawn with EBADF).
+  //
+  // WORKTREES_DIR keeps depth 3 because the sidebar expects to see new
+  // `<section>/<project>/<branch>` worktrees appear immediately.
+  const commonIgnored = [
+    /(^|[\/\\])\..(?!archive)/, // dotfiles except .archive
+    /node_modules/,
+    /[\/\\](data|dist|build|coverage|target|\.next|\.nuxt|\.cache|__pycache__|out|tmp)([\/\\]|$)/,
+    /\.(log|lock|pack|idx)$/,
+  ];
 
-  watcher = chokidar.watch(dirsToWatch, {
-    depth: 2,
-    ignoreInitial: true,
-    ignored: [
-      /(^|[\/\\])\..(?!archive)/, // ignore dotfiles except .archive
-      /node_modules/,
-    ],
-  });
+  const watchers = [];
+  const shallowRoots = [projDir, PROFILES_DIR, SKILLS_DIR].filter(d => fs.existsSync(d));
+  if (shallowRoots.length) {
+    watchers.push(chokidar.watch(shallowRoots, {
+      depth: 1,
+      ignoreInitial: true,
+      ignored: commonIgnored,
+    }));
+  }
+  if (fs.existsSync(WORKTREES_DIR)) {
+    watchers.push(chokidar.watch(WORKTREES_DIR, {
+      depth: 3,
+      ignoreInitial: true,
+      ignored: commonIgnored,
+    }));
+  }
+  if (watchers.length === 0) return;
+
+  // Compose into a single watcher-like object so the rest of this
+  // function can keep using `.on()` uniformly.
+  watcher = {
+    _watchers: watchers,
+    on(event, fn) { watchers.forEach(w => w.on(event, fn)); return this; },
+    close() { return Promise.all(watchers.map(w => w.close())); },
+  };
 
   const notify = (type, filePath) => {
     clearTimeout(watchDebounce);

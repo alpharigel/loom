@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Loom</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #0e0e10;
+    --bg-2: #141417;
+    --ink: #e9e6df;
+    --ink-dim: #6b6760;
+    --ink-faint: #2a2824;
+    --gold: #e8a838;
+    --gold-soft: rgba(232, 168, 56, 0.16);
+    --gold-line: rgba(232, 168, 56, 0.35);
+    --warp: rgba(233, 230, 223, 0.04);
+    --warp-lit: rgba(233, 230, 223, 0.09);
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { height: 100%; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "DM Sans", system-ui, sans-serif;
+    font-weight: 400;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: geometricPrecision;
+    cursor: default;
+    user-select: none;
+  }
+
+  /* radial vignette + subtle gold wash */
+  body::before {
+    content: "";
+    position: fixed; inset: 0;
+    background:
+      radial-gradient(ellipse at 50% 38%, rgba(232,168,56,0.07), transparent 55%),
+      radial-gradient(ellipse at 50% 120%, rgba(232,168,56,0.05), transparent 60%),
+      linear-gradient(180deg, #0b0b0d 0%, #0e0e10 45%, #0a0a0c 100%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* grain */
+  body::after {
+    content: "";
+    position: fixed; inset: 0;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.55 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+    opacity: 0.35;
+    mix-blend-mode: overlay;
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  /* hairline frame — industrial */
+  .frame {
+    position: fixed; inset: 18px;
+    border: 1px solid var(--ink-faint);
+    pointer-events: none;
+    z-index: 2;
+  }
+  .frame::before, .frame::after {
+    content: "";
+    position: absolute;
+    width: 14px; height: 14px;
+    border: 1px solid var(--gold-line);
+  }
+  .frame::before { top: -1px; left: -1px; border-right: 0; border-bottom: 0; }
+  .frame::after  { bottom: -1px; right: -1px; border-left: 0; border-top: 0; }
+
+  /* corner tags */
+  .corner {
+    position: fixed;
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--ink-dim);
+    z-index: 3;
+  }
+  .corner.tl { top: 30px; left: 36px; }
+  .corner.tr { top: 30px; right: 36px; }
+  .corner.br { bottom: 30px; right: 36px; }
+  .corner .dot {
+    display: inline-block;
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--gold);
+    box-shadow: 0 0 8px var(--gold-soft);
+    margin-right: 8px;
+    vertical-align: 1px;
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 0.35; transform: scale(1); }
+    50%      { opacity: 1;    transform: scale(1.25); }
+  }
+
+  /* stage */
+  .stage {
+    position: relative;
+    z-index: 2;
+    height: 100%;
+    display: grid;
+    place-items: center;
+  }
+
+  .panel {
+    position: relative;
+    width: min(560px, 70vw);
+    padding: 64px 56px 48px;
+    text-align: center;
+  }
+
+  /* warp: vertical threads in background */
+  .warp {
+    position: absolute;
+    inset: -20% -10%;
+    z-index: 0;
+    pointer-events: none;
+    opacity: 0.9;
+    mask-image: radial-gradient(ellipse at 50% 50%, black 35%, transparent 75%);
+  }
+
+  /* shuttle track */
+  .shuttle {
+    position: absolute;
+    left: 0; right: 0;
+    top: 50%;
+    z-index: 1;
+    pointer-events: none;
+    mask-image: linear-gradient(90deg, transparent, black 12%, black 88%, transparent);
+  }
+
+  .wordmark-wrap {
+    position: relative;
+    z-index: 2;
+    line-height: 1;
+  }
+
+  .wordmark {
+    font-family: "DM Sans", sans-serif;
+    font-weight: 300;
+    font-size: clamp(72px, 12vw, 132px);
+    letter-spacing: -0.045em;
+    color: var(--ink);
+    display: inline-block;
+    position: relative;
+    padding: 0 0.08em;
+  }
+
+  /* the gold thread that runs through the wordmark */
+  .wordmark::before {
+    content: "";
+    position: absolute;
+    left: -8%; right: -8%;
+    top: calc(50% + 2px);
+    height: 1px;
+    background: linear-gradient(90deg,
+      transparent,
+      var(--gold-line) 22%,
+      var(--gold) 50%,
+      var(--gold-line) 78%,
+      transparent);
+    transform-origin: left center;
+    animation: thread-draw 2s cubic-bezier(0.2, 0.7, 0.1, 1) both;
+  }
+  @keyframes thread-draw {
+    0%   { transform: scaleX(0); opacity: 0; }
+    40%  { opacity: 1; }
+    100% { transform: scaleX(1); opacity: 1; }
+  }
+
+  /* individual letters lift in */
+  .wordmark span {
+    display: inline-block;
+    opacity: 0;
+    transform: translateY(18px);
+    animation: lift 900ms cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+  }
+  .wordmark span:nth-child(1) { animation-delay: 80ms; }
+  .wordmark span:nth-child(2) { animation-delay: 180ms; }
+  .wordmark span:nth-child(3) { animation-delay: 280ms; }
+  .wordmark span:nth-child(4) { animation-delay: 380ms; }
+  @keyframes lift {
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .tagline {
+    margin-top: 28px;
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 10px;
+    letter-spacing: 0.38em;
+    text-transform: uppercase;
+    color: var(--ink-dim);
+    opacity: 0;
+    animation: fade-in 700ms 700ms ease-out forwards;
+  }
+
+  .status {
+    margin-top: 64px;
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    color: var(--ink);
+    opacity: 0;
+    animation: fade-in 700ms 900ms ease-out forwards;
+  }
+  .status .arrow {
+    color: var(--gold);
+    font-weight: 500;
+  }
+  .status .text {
+    color: var(--ink);
+  }
+  .status .caret {
+    display: inline-block;
+    width: 7px; height: 13px;
+    background: var(--gold);
+    margin-left: 2px;
+    animation: blink 1.05s steps(1) infinite;
+    box-shadow: 0 0 8px var(--gold-soft);
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* progress ticks under status */
+  .ticks {
+    margin-top: 20px;
+    display: flex;
+    justify-content: center;
+    gap: 4px;
+    opacity: 0;
+    animation: fade-in 700ms 1100ms ease-out forwards;
+  }
+  .ticks i {
+    width: 18px; height: 2px;
+    background: var(--ink-faint);
+    display: block;
+  }
+  .ticks i.on {
+    background: var(--gold);
+    box-shadow: 0 0 6px var(--gold-soft);
+  }
+
+  @keyframes fade-in {
+    to { opacity: 1; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; }
+    .status { opacity: 1; } .tagline { opacity: 1; } .ticks { opacity: 1; }
+    .wordmark span { opacity: 1; transform: none; }
+  }
+</style>
+</head>
+<body>
+  <div class="frame" aria-hidden="true"></div>
+
+  <div class="corner tl"><span class="dot"></span>LOOM · v0.1</div>
+  <div class="corner tr" id="host">—</div>
+  <div class="corner br">AGENT WORKSPACE</div>
+
+  <main class="stage">
+    <section class="panel" aria-live="polite">
+      <!-- warp: vertical threads -->
+      <svg class="warp" viewBox="0 0 800 600" preserveAspectRatio="none" aria-hidden="true">
+        <defs>
+          <linearGradient id="warpGrad" x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%"  stop-color="rgba(233,230,223,0)"/>
+            <stop offset="50%" stop-color="rgba(233,230,223,0.14)"/>
+            <stop offset="100%" stop-color="rgba(233,230,223,0)"/>
+          </linearGradient>
+        </defs>
+        <g stroke="url(#warpGrad)" stroke-width="1">
+          <!-- 32 vertical threads, evenly spaced -->
+          <g id="warpLines"></g>
+        </g>
+      </svg>
+
+      <!-- shuttle: the weaving thread sweeping across -->
+      <svg class="shuttle" viewBox="0 0 800 40" preserveAspectRatio="none" aria-hidden="true">
+        <defs>
+          <linearGradient id="sg" x1="0" x2="1" y1="0" y2="0">
+            <stop offset="0%"   stop-color="rgba(232,168,56,0)"/>
+            <stop offset="45%"  stop-color="rgba(232,168,56,0.55)"/>
+            <stop offset="55%"  stop-color="rgba(232,168,56,0.9)"/>
+            <stop offset="100%" stop-color="rgba(232,168,56,0)"/>
+          </linearGradient>
+          <filter id="glow"><feGaussianBlur stdDeviation="0.6"/></filter>
+        </defs>
+        <line x1="0" y1="20" x2="800" y2="20" stroke="rgba(232,168,56,0.08)" stroke-width="1"/>
+        <g>
+          <line x1="-120" y1="20" x2="120" y2="20" stroke="url(#sg)" stroke-width="1.4" filter="url(#glow)">
+            <animate attributeName="x1" from="-120" to="800" dur="3.2s" repeatCount="indefinite"/>
+            <animate attributeName="x2" from="120"  to="1040" dur="3.2s" repeatCount="indefinite"/>
+          </line>
+          <!-- tiny shuttle bead -->
+          <circle r="2" cy="20" fill="#e8a838">
+            <animate attributeName="cx" values="-100;900;-100" dur="6.4s" repeatCount="indefinite" keyTimes="0;0.5;1" keySplines="0.45 0 0.55 1;0.45 0 0.55 1" calcMode="spline"/>
+          </circle>
+        </g>
+      </svg>
+
+      <div class="wordmark-wrap">
+        <h1 class="wordmark" aria-label="Loom">
+          <span>l</span><span>o</span><span>o</span><span>m</span>
+        </h1>
+        <div class="tagline">agent · project · workspace</div>
+      </div>
+
+      <div class="status">
+        <span class="arrow">&#9656;</span>
+        <span class="text" id="status-text">starting loom server</span>
+        <span class="caret" aria-hidden="true"></span>
+      </div>
+
+      <div class="ticks" id="ticks">
+        <i class="on"></i><i></i><i></i><i></i><i></i>
+      </div>
+    </section>
+  </main>
+
+<script>
+  // draw 32 warp threads into the SVG
+  (function () {
+    const g = document.getElementById("warpLines");
+    if (!g) return;
+    const COUNT = 32;
+    const W = 800;
+    for (let i = 0; i < COUNT; i++) {
+      const x = ((i + 0.5) / COUNT) * W;
+      const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+      line.setAttribute("x1", x);
+      line.setAttribute("x2", x);
+      line.setAttribute("y1", 0);
+      line.setAttribute("y2", 600);
+      // vary opacity slightly for hand-woven feel
+      const jitter = 0.5 + Math.random() * 0.9;
+      line.setAttribute("stroke-opacity", jitter.toFixed(2));
+      g.appendChild(line);
+    }
+  })();
+
+  // public hook for the Rust side to update status text
+  const statusEl = document.getElementById("status-text");
+  const ticksEl  = document.getElementById("ticks");
+  const hostEl   = document.getElementById("host");
+  let tickIdx = 0;
+
+  window.__setStatus = function (text) {
+    if (!statusEl) return;
+    statusEl.textContent = String(text || "").toLowerCase();
+    // advance progress ticks
+    if (ticksEl) {
+      const children = ticksEl.children;
+      tickIdx = Math.min(tickIdx + 1, children.length);
+      for (let i = 0; i < children.length; i++) {
+        children[i].classList.toggle("on", i < tickIdx);
+      }
+    }
+  };
+
+  window.__setHost = function (text) {
+    if (hostEl) hostEl.textContent = String(text || "").toUpperCase();
+  };
+
+  // gentle idle heartbeat on the status while server is coming up
+  let dots = 0;
+  const base = () => statusEl && statusEl.textContent.replace(/\.+$/, "");
+  setInterval(() => {
+    if (!statusEl) return;
+    dots = (dots + 1) % 4;
+    statusEl.textContent = base() + ".".repeat(dots);
+  }, 500);
+</script>
+</body>
+</html>

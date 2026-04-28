@@ -15,6 +15,23 @@ const TerminalManager = {
   SESSION_TTL: 30 * 60 * 1000, // 30 minutes
 
   init() {
+    // Ensure the Nerd Font is fully loaded before any terminal renders, so
+    // the canvas/WebGL glyph cache picks it up on first paint. Without this,
+    // Powerline / Nerd icons render as missing-glyph boxes (and stay that
+    // way until the renderer is forced to remeasure).
+    if (document.fonts && document.fonts.load) {
+      document.fonts.load("13px 'Symbols Nerd Font Mono'").then(() => {
+        // Force any already-created terminals to reflow with the loaded font.
+        for (const entry of this.terminals.values()) {
+          try {
+            entry.term.options.fontFamily = entry.term.options.fontFamily;
+            entry.fitAddon.fit();
+            entry.term.refresh(0, entry.term.rows - 1);
+          } catch { /* ignore */ }
+        }
+      }).catch(() => {});
+    }
+
     App.on('project:selected', (project) => this.onProjectSelected(project));
 
     // Setup right-pane tab switching
@@ -55,12 +72,17 @@ const TerminalManager = {
       }
     });
 
-    // Listen for agent status updates from server (via Claude Code hooks)
+    // Listen for agent status updates from server (via Claude Code hooks).
+    // A null status means the server cleared the entry (e.g. another tab
+    // clicked into the project) — propagate the clear to this tab too.
     App.on('agent:status', (msg) => {
-      if (msg.path && msg.status) {
+      if (!msg.path) return;
+      if (msg.status) {
         this.agentStatus.set(msg.path, msg.status);
-        App.emit('agent:status:updated', { path: msg.path, status: msg.status });
+      } else {
+        this.agentStatus.delete(msg.path);
       }
+      App.emit('agent:status:updated', { path: msg.path, status: msg.status || null });
     });
 
     // Load initial statuses from server
@@ -108,7 +130,7 @@ const TerminalManager = {
     container.appendChild(wrapperEl);
 
     const term = new Terminal({
-      fontFamily: "'JetBrains Mono', 'SF Mono', 'Fira Code', monospace",
+      fontFamily: "'JetBrains Mono', 'Symbols Nerd Font Mono', 'SF Mono', 'Fira Code', monospace",
       fontSize: 13,
       lineHeight: 1.4,
       cursorBlink: true,
@@ -147,6 +169,11 @@ const TerminalManager = {
     term.loadAddon(webLinksAddon);
 
     term.open(wrapperEl);
+
+    term.onSelectionChange(() => {
+      const sel = term.getSelection();
+      if (sel) navigator.clipboard.writeText(sel).catch(() => {});
+    });
 
     // Send create FIRST, then fit (fit triggers onResize synchronously)
     let created = false;
@@ -421,6 +448,9 @@ const TerminalManager = {
     if (status === 'done' || status === 'error') {
       this.agentStatus.delete(path);
       App.emit('agent:status:updated', { path, status: null });
+      // Tell the server to drop the sticky 'done' so subsequent hook events
+      // can set a new status again.
+      App.api('DELETE', `/agent-status?path=${encodeURIComponent(path)}`).catch(() => {});
     }
   },
 

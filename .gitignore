@@ -1,14 +1,22 @@
 node_modules/
-*.log
-.DS_Store
-
-# iOS / Xcode
-ios/build/
-ios/Loom.xcodeproj/xcuserdata/
-ios/Loom.xcodeproj/project.xcworkspace/xcuserdata/
-ios/.build/
-node_modules/
 package-lock.json
 tmp/
 start-loom.sh
 .claude/
+*.log
+.DS_Store
+
+# Local secrets
+.env
+.env.*
+!.env.example
+
+# iOS / Xcode
+ios/build/
+ios/.build/
+ios/Loom.xcodeproj/xcuserdata/
+ios/Loom.xcodeproj/project.xcworkspace/xcuserdata/
+
+# Tauri
+src-tauri/target/
+src-tauri/gen/

@@ -21,8 +21,21 @@ const Projects = {
     // Re-highlight on project selection
     App.on('project:selected', () => this.highlightActive());
 
-    // Initial load
-    this.refresh();
+    // Initial load — but skip if no profile is chosen yet. Rendering the
+    // no-profile result would briefly show the global scratch/agents dirs,
+    // then flip to the profile-scoped view once the user picks, which looks
+    // like the whole sidebar refreshing and swapping content.
+    // selectProfile() fires its own refresh(), so we pick up cleanly then.
+    if (App.state.profile) {
+      this.refresh();
+    }
+
+    // Safety-net polling: catch anything fs:changed misses (e.g. new
+    // worktrees nested past the watcher depth). Also skip when there's no
+    // profile — we'd just re-trigger the same flash described above.
+    setInterval(() => {
+      if (App.state.profile) this.refresh();
+    }, 5000);
   },
 
   _lastFingerprint: null,
@@ -39,27 +52,31 @@ const Projects = {
         (data.skills || []).map(p => p.name),
         (data.archived || []).map(p => p.name),
       ]);
-      if (fingerprint === this._lastFingerprint) return;
-      this._lastFingerprint = fingerprint;
+      const topLevelChanged = fingerprint !== this._lastFingerprint;
+      if (topLevelChanged) {
+        this._lastFingerprint = fingerprint;
 
-      App.state.projects = data.projects;
-      App.state.scratch = data.scratch || [];
-      App.state.agents = data.agents || [];
-      App.state.skills = data.skills || [];
-      App.state.archived = data.archived;
-      this.render(data);
+        App.state.projects = data.projects;
+        App.state.scratch = data.scratch || [];
+        App.state.agents = data.agents || [];
+        App.state.skills = data.skills || [];
+        App.state.archived = data.archived;
+        this.render(data);
 
-      // Restore last selected project on first load
-      if (!App.state.selectedProject) {
-        try {
-          const saved = JSON.parse(localStorage.getItem('loom:selectedProject'));
-          if (saved && saved.path) {
-            App.selectProject(saved);
-          }
-        } catch { /* ignore */ }
+        // Restore last selected project on first load
+        if (!App.state.selectedProject) {
+          try {
+            const saved = JSON.parse(localStorage.getItem('loom:selectedProject'));
+            if (saved && saved.path) {
+              App.selectProject(saved);
+            }
+          } catch { /* ignore */ }
+        }
       }
 
-      // Lazy-load full worktree lists for all section items
+      // Always lazy-load worktrees so additions/removals inside an
+      // existing project propagate even when the top-level fingerprint
+      // is unchanged. lazyLoadWorktrees has its own per-project diff.
       const allItems = [
         ...(data.scratch || []),
         ...(data.agents || []),
@@ -216,8 +233,19 @@ const Projects = {
     const overlay = document.getElementById('new-project-overlay');
     const input = document.getElementById('input-project-name');
     const title = document.getElementById('new-project-title');
-    if (title) title.textContent = `New ${sectionType.replace(/s$/, '')}`;
+    const nameLabel = document.getElementById('new-project-name-label');
+    const createBtn = document.getElementById('btn-create-project');
+    const singular = sectionType.replace(/s$/, '');
+    const singularTitle = singular.charAt(0).toUpperCase() + singular.slice(1);
+    if (title) title.textContent = `New ${singularTitle}`;
+    if (nameLabel) nameLabel.textContent = `${singularTitle} Name`;
+    if (createBtn) createBtn.textContent = `Create ${singularTitle}`;
     this.newItemSection = sectionType;
+
+    // Scratch doesn't need the clone-from-GitHub tab — just a name input.
+    const tabs = overlay.querySelector('.modal-tabs');
+    if (tabs) tabs.classList.toggle('hidden', sectionType === 'scratch');
+
     overlay.classList.remove('hidden');
     // Reset to blank tab
     const blankTab = overlay.querySelector('.modal-tab[data-tab="blank"]');
@@ -235,8 +263,9 @@ const Projects = {
     if (section) el.dataset.section = section;
 
     const isManaged = ['projects', 'scratch', 'agents', 'skills'].includes(type);
+    const supportsWorktrees = type !== 'scratch' && type !== 'skills';
 
-    if (type === 'projects') {
+    if (type === 'projects' || type === 'scratch' || type === 'agents') {
       el.draggable = true;
     }
 
@@ -245,10 +274,13 @@ const Projects = {
       const archiveOrDelete = type === 'projects'
         ? `<button class="project-action-btn danger" title="Archive" data-action="archive">▼</button>`
         : (type === 'skills' ? '' : `<button class="project-action-btn danger" title="Delete" data-action="delete-item">✕</button>`);
+      const worktreeBtn = supportsWorktrees
+        ? `<button class="project-action-btn worktree-btn" title="New worktree" data-action="worktree">+</button>`
+        : '';
       actionsHtml = `
         <div class="project-actions">
           ${archiveOrDelete}
-          <button class="project-action-btn worktree-btn" title="New worktree" data-action="worktree">+</button>
+          ${worktreeBtn}
         </div>
       `;
     }
