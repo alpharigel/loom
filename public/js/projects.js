@@ -93,7 +93,14 @@ const Projects = {
       try {
         const section = item.section || 'projects';
         const data = await App.api('GET', `/projects/${encodeURIComponent(item.name)}/worktrees?section=${section}`);
-        const existing = item.worktrees || [];
+        // Compare against the cached state, not the freshly-fetched `item`.
+        // /projects doesn't return worktrees inline, so `item.worktrees` is
+        // always undefined on subsequent refreshes — without this lookup,
+        // updateProjectWorktrees would run every 5s, rebuilding the rows
+        // (and the status dots inside them) on each poll.
+        const stateList = App.state[section === 'projects' ? 'projects' : section] || [];
+        const stateItem = stateList.find(p => p.name === item.name);
+        const existing = (stateItem && stateItem.worktrees) || [];
         const newPaths = data.worktrees.map(w => w.path).sort().join(',');
         const oldPaths = existing.map(w => w.path).sort().join(',');
         if (newPaths !== oldPaths) {
@@ -123,6 +130,10 @@ const Projects = {
     const stateList = App.state[section === 'projects' ? 'projects' : section] || [];
     const stateItem = stateList.find(p => p.name === item.name);
     if (stateItem) stateItem.worktrees = item.worktrees;
+    // Newly-rebuilt worktree rows have empty agent-status-dot spans (no
+    // status class → display:none). Re-apply current statuses so they're
+    // visible immediately instead of waiting for the next hook event.
+    this.updateStatusDots();
   },
 
   SECTION_ICONS: { scratch: '⚡', agents: '●', projects: '◆', skills: '⚙' },

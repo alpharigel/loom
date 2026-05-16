@@ -165,15 +165,55 @@ const TerminalManager = {
     const fitAddon = new FitAddon.FitAddon();
     term.loadAddon(fitAddon);
 
-    const webLinksAddon = new WebLinksAddon.WebLinksAddon();
+    // Open links via the server's /api/open-url. window.open(uri, '_blank')
+    // (the addon's default) is a no-op in Tauri's WKWebView without the
+    // opener plugin, so route through the backend which shells out to
+    // `open`/`xdg-open`/`start`.
+    const webLinksAddon = new WebLinksAddon.WebLinksAddon((event, uri) => {
+      App.api('POST', '/open-url', { url: uri }).catch(() => {
+        // Browser fallback: open in a new tab.
+        try { window.open(uri, '_blank', 'noopener'); } catch {}
+      });
+    });
     term.loadAddon(webLinksAddon);
 
     term.open(wrapperEl);
 
+    // Copy selection to clipboard. navigator.clipboard.writeText silently
+    // fails in Tauri's WKWebView, so we also POST to the server which runs
+    // pbcopy/clip/xclip — whichever path actually lands the text wins.
     term.onSelectionChange(() => {
       const sel = term.getSelection();
-      if (sel) navigator.clipboard.writeText(sel).catch(() => {});
+      if (!sel) return;
+      if (navigator.clipboard?.writeText) {
+        navigator.clipboard.writeText(sel).catch(() => {});
+      }
+      App.api('POST', '/clipboard', { text: sel }).catch(() => {});
     });
+
+    // OSC 52 — tmux (with `set-clipboard on`) emits this escape sequence
+    // when text is copied in its mouse/copy mode. xterm.js doesn't push it
+    // to the system clipboard on its own, so we decode and route through
+    // the same backend. Without this, copying via the tmux mouse drag in
+    // the Mac app silently does nothing.
+    try {
+      term.parser.registerOscHandler(52, (data) => {
+        // Format: "<selection>;<base64-payload>". Selection is usually 'c'
+        // (clipboard). A literal '?' payload is a paste-request — ignore.
+        const semi = data.indexOf(';');
+        if (semi < 0) return false;
+        const payload = data.slice(semi + 1);
+        if (payload === '?' || !payload) return false;
+        let text;
+        try { text = atob(payload); } catch { return false; }
+        try { text = decodeURIComponent(escape(text)); } catch { /* keep raw */ }
+        if (navigator.clipboard?.writeText) {
+          navigator.clipboard.writeText(text).catch(() => {});
+        }
+        App.api('POST', '/clipboard', { text }).catch(() => {});
+        return true;
+      });
+    } catch { /* xterm without parser API — ignore */ }
 
     // Send create FIRST, then fit (fit triggers onResize synchronously)
     let created = false;

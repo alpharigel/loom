@@ -11,6 +11,7 @@
     "start": "node server.js",
     "dev": "node --watch server.js",
     "build": "node scripts/build.js",
+    "test": "node --test 'test/**/*.test.js'",
     "app": "tauri dev",
     "app:build": "tauri build",
     "tauri": "tauri"

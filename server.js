@@ -5,7 +5,7 @@ const pty = require('node-pty');
 const chokidar = require('chokidar');
 const path = require('path');
 const fs = require('fs');
-const { execSync, exec } = require('child_process');
+const { execSync, exec, spawn } = require('child_process');
 const os = require('os');
 const crypto = require('crypto');
 
@@ -1549,6 +1549,48 @@ app.delete('/api/agent-status', (req, res) => {
     });
   }
   res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// Clipboard / URL opener — server-side fallbacks for the Tauri WKWebView,
+// which silently drops navigator.clipboard.writeText and window.open for
+// external URLs. Both endpoints work cross-platform and degrade gracefully
+// when used from a normal browser.
+// ---------------------------------------------------------------------------
+
+app.post('/api/clipboard', (req, res) => {
+  const text = typeof req.body?.text === 'string' ? req.body.text : '';
+  let cmd, args;
+  if (IS_MACOS) { cmd = 'pbcopy'; args = []; }
+  else if (IS_WINDOWS) { cmd = 'clip'; args = []; }
+  else { cmd = 'xclip'; args = ['-selection', 'clipboard']; }
+  try {
+    const proc = spawn(cmd, args, { stdio: ['pipe', 'ignore', 'ignore'] });
+    proc.on('error', () => { /* binary missing — ignore */ });
+    proc.stdin.end(text);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/open-url', (req, res) => {
+  const url = typeof req.body?.url === 'string' ? req.body.url : '';
+  // Only allow http(s) so this can't be turned into an arbitrary-command
+  // surface by anything that can reach the loopback API.
+  if (!/^https?:\/\//i.test(url)) return res.status(400).json({ error: 'invalid url' });
+  let cmd, args;
+  if (IS_MACOS) { cmd = 'open'; args = [url]; }
+  else if (IS_WINDOWS) { cmd = 'cmd'; args = ['/c', 'start', '', url]; }
+  else { cmd = 'xdg-open'; args = [url]; }
+  try {
+    const proc = spawn(cmd, args, { detached: true, stdio: 'ignore' });
+    proc.on('error', () => { /* ignore */ });
+    proc.unref();
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ---------------------------------------------------------------------------
