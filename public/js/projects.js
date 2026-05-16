@@ -582,7 +582,7 @@ const Projects = {
   // ---- Archive / Unarchive ----
 
   async archiveProject(name) {
-    if (!confirm(`Archive project "${name}"? It will be moved to .archive/`)) return;
+    if (!(await App.confirm(`Archive project "${name}"? It will be moved to .archive/`, { okText: 'Archive' }))) return;
     try {
       await App.api('POST', `/projects/${encodeURIComponent(name)}/archive`);
       App.toast(`"${name}" archived`, 'success');
@@ -608,7 +608,7 @@ const Projects = {
   // ---- Delete Worktree ----
 
   async deleteWorktree(projectName, branch, section) {
-    if (!confirm(`Delete worktree "${branch}" from "${projectName}"?`)) return;
+    if (!(await App.confirm(`Delete worktree "${branch}" from "${projectName}"?`))) return;
     const sectionParam = section ? `?section=${section}` : '';
     try {
       await App.api('DELETE', `/projects/${encodeURIComponent(projectName)}/worktrees/${encodeURIComponent(branch)}${sectionParam}`);
@@ -623,7 +623,7 @@ const Projects = {
   },
 
   async deleteSectionItem(name, section) {
-    if (!confirm(`Delete "${name}" from ${section}? This will permanently remove the directory.`)) return;
+    if (!(await App.confirm(`Delete "${name}" from ${section}?\n\nThis will permanently remove the directory.`))) return;
     try {
       await App.api('DELETE', `/sections/${encodeURIComponent(section)}/${encodeURIComponent(name)}`);
       App.toast(`"${name}" deleted`, 'success');

@@ -666,6 +666,56 @@ const App = {
     }, 3000);
   },
 
+  // ---- Confirm dialog ----
+  //
+  // Tauri's macOS WKWebView silently suppresses window.confirm(), so any
+  // destructive action guarded by the native dialog became a no-op inside
+  // Loom.app. This is a lightweight in-app replacement that works in both
+  // the Tauri webview and a normal browser.
+
+  confirm(message, { okText = 'Delete', cancelText = 'Cancel', danger = true } = {}) {
+    return new Promise((resolve) => {
+      const overlay = document.createElement('div');
+      overlay.className = 'modal-overlay';
+      overlay.style.zIndex = '10000';
+      const okStyle = danger
+        ? 'background: var(--danger, #e85454); color: #fff;'
+        : '';
+      overlay.innerHTML = `
+        <div class="modal" style="max-width: 420px;">
+          <div class="modal-body" style="padding: 20px; white-space: pre-wrap;"></div>
+          <div style="display:flex; gap:8px; justify-content:flex-end; padding: 12px 20px;">
+            <button class="btn btn-ghost" data-act="cancel"></button>
+            <button class="btn" style="${okStyle}" data-act="ok"></button>
+          </div>
+        </div>
+      `;
+      overlay.querySelector('.modal-body').textContent = message;
+      overlay.querySelector('[data-act="ok"]').textContent = okText;
+      overlay.querySelector('[data-act="cancel"]').textContent = cancelText;
+
+      const close = (result) => {
+        document.removeEventListener('keydown', onKey);
+        overlay.remove();
+        resolve(result);
+      };
+      const onKey = (e) => {
+        if (e.key === 'Escape') { e.preventDefault(); close(false); }
+        else if (e.key === 'Enter') { e.preventDefault(); close(true); }
+      };
+
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) close(false);
+      });
+      overlay.querySelector('[data-act="ok"]').addEventListener('click', () => close(true));
+      overlay.querySelector('[data-act="cancel"]').addEventListener('click', () => close(false));
+      document.addEventListener('keydown', onKey);
+
+      document.body.appendChild(overlay);
+      overlay.querySelector('[data-act="ok"]').focus();
+    });
+  },
+
   // ---- Keybindings ----
 
   setupGlobalKeybindings() {
