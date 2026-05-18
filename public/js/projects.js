@@ -11,6 +11,7 @@ const Projects = {
     this.setupNewWorktree();
     this.setupCommandConfig();
     this.setupDragAndDrop();
+    this.setupRefreshButton();
 
     // Listen for filesystem changes
     App.on('fs:changed', () => this.refresh());
@@ -39,6 +40,23 @@ const Projects = {
   },
 
   _lastFingerprint: null,
+
+  setupRefreshButton() {
+    const btn = document.getElementById('btn-refresh-projects');
+    if (!btn) return;
+    btn.addEventListener('click', async () => {
+      if (btn.classList.contains('spinning')) return;
+      btn.classList.add('spinning');
+      // Force a full re-render even if nothing changed.
+      this._lastFingerprint = null;
+      try {
+        await this.refresh();
+      } finally {
+        // Keep the spin visible for at least one full rotation.
+        setTimeout(() => btn.classList.remove('spinning'), 600);
+      }
+    });
+  },
 
   async refresh() {
     try {

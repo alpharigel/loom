@@ -440,6 +440,14 @@ body::before {
   height: 24px;
 }
 
+.icon-btn.spinning svg {
+  animation: icon-btn-spin 0.6s linear infinite;
+}
+
+@keyframes icon-btn-spin {
+  to { transform: rotate(360deg); }
+}
+
 /* ============================================================
    Main Layout
    ============================================================ */
