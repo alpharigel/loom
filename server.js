@@ -1424,6 +1424,43 @@ app.put('/api/file', (req, res) => {
   }
 });
 
+// Raw file bytes with a sensible Content-Type so images, PDFs, HTML, etc.
+// can be embedded directly in the viewer pane.
+const CONTENT_TYPES = {
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
+  webp: 'image/webp', bmp: 'image/bmp', ico: 'image/x-icon', svg: 'image/svg+xml',
+  pdf: 'application/pdf',
+  html: 'text/html; charset=utf-8', htm: 'text/html; charset=utf-8',
+  css: 'text/css; charset=utf-8',
+  js: 'application/javascript; charset=utf-8', mjs: 'application/javascript; charset=utf-8',
+  json: 'application/json; charset=utf-8',
+  txt: 'text/plain; charset=utf-8', md: 'text/plain; charset=utf-8',
+  mp4: 'video/mp4', webm: 'video/webm', mp3: 'audio/mpeg', wav: 'audio/wav',
+};
+
+app.get('/api/file-content', (req, res) => {
+  const filePath = req.query.path;
+  if (!filePath) return res.status(400).json({ error: 'path required' });
+  const resolved = path.resolve(filePath);
+  try {
+    const stat = fs.statSync(resolved);
+    if (!stat.isFile()) return res.status(400).json({ error: 'not a file' });
+    const ext = path.extname(resolved).slice(1).toLowerCase();
+    const ct = CONTENT_TYPES[ext] || 'application/octet-stream';
+    res.setHeader('Content-Type', ct);
+    res.setHeader('Content-Length', stat.size);
+    // SVGs are returned as image/svg+xml; setting a strict CSP avoids
+    // executing scripts even if they get loaded into something other than
+    // an <img> by accident.
+    if (ext === 'svg') {
+      res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'");
+    }
+    fs.createReadStream(resolved).pipe(res);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/files/mkdir', (req, res) => {
   const { path: dirPath } = req.body;
   if (!dirPath) return res.status(400).json({ error: 'path required' });
@@ -1583,6 +1620,41 @@ app.post('/api/open-url', (req, res) => {
   if (IS_MACOS) { cmd = 'open'; args = [url]; }
   else if (IS_WINDOWS) { cmd = 'cmd'; args = ['/c', 'start', '', url]; }
   else { cmd = 'xdg-open'; args = [url]; }
+  try {
+    const proc = spawn(cmd, args, { detached: true, stdio: 'ignore' });
+    proc.on('error', () => { /* ignore */ });
+    proc.unref();
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/open-file', (req, res) => {
+  const raw = typeof req.body?.path === 'string' ? req.body.path : '';
+  if (!raw) return res.status(400).json({ error: 'path required' });
+  const resolved = path.resolve(raw);
+
+  // Security gate: only allow paths inside the configured project directory
+  // or the loom data directory. Use prefix check on resolved absolute paths
+  // (NOT substring containment) so '..' segments can't escape.
+  const projDir = path.resolve(getAppConfig().projectDirectory || '');
+  const dataDir = path.resolve(APP_CONFIG_DIR);
+  const allowed = [projDir, dataDir].filter(Boolean).some((root) => {
+    return resolved === root || resolved.startsWith(root + path.sep);
+  });
+  if (!allowed) return res.status(400).json({ error: 'path outside allowed roots' });
+
+  try {
+    if (!fs.existsSync(resolved)) return res.status(404).json({ error: 'not found' });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+
+  let cmd, args;
+  if (IS_MACOS) { cmd = 'open'; args = [resolved]; }
+  else if (IS_WINDOWS) { cmd = 'cmd'; args = ['/c', 'start', '', resolved]; }
+  else { cmd = 'xdg-open'; args = [resolved]; }
   try {
     const proc = spawn(cmd, args, { detached: true, stdio: 'ignore' });
     proc.on('error', () => { /* ignore */ });
