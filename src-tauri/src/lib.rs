@@ -43,7 +43,8 @@ fn resolve_server_root(app: &tauri::AppHandle) -> Option<PathBuf> {
         }
     }
 
-    if let Some(home) = std::env::var_os("HOME") {
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
+    if let Some(home) = home {
         let p = PathBuf::from(home).join("Dev/loom");
         if has_runtime(&p) {
             return Some(p);
